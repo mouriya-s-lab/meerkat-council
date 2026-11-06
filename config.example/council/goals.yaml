@@ -1,5 +1,5 @@
 draft:
-  goalTools: [pm_draft, pm_block]
+  goalTools: [pm_draft]
   opening: |
     你在为议题 {{.Ref}}（议程编号 {{.Agenda}}，第 {{.Round}} 轮）起草决策表第 {{.Version}} 版。
 
@@ -18,11 +18,11 @@ draft:
     2. 需要时用 pm_read_issue 查阅 PM 仓库里的议题。
     3. 调用 pm_draft 提交决策表。每行 id 写成 "{{.Agenda}}-<两位序号>"，从 01 起；what、where（带文件路径）、how、tradeoff 写清楚；category 写这一行属于意图还是技术；missingDesign 表示设计书是否缺这部分；deliver 写要在哪个仓库建实现 issue（repo、title、body），不需要时为 null。supersedes 只有人类议题才填，普通议题为 []；withdrawn 为 null。
 
-    如果本议题必须等某个尚未定案的人类议题先定案，改为调用 pm_block 指向它。pm_draft 或 pm_block 成功即结束本任务。
-  continue: 你还没有成功调用 pm_draft 或 pm_block。按开场消息的要求完成决策表，调用 pm_draft 结束本任务；若工具返回错误，按错误修正后重试。
+    pm_draft 成功即结束本任务。
+  continue: 你还没有成功调用 pm_draft。按开场消息的要求完成决策表，调用 pm_draft 结束本任务；若工具返回错误，按错误修正后重试。
   resume: |
     你之前为议题 {{.Ref}} 起草决策表第 {{.Version}} 版的会话被中止，现已恢复。
-    接着之前的进度完成起草：调用 pm_draft 提交决策表，或在必须等待人类议题时调用 pm_block。成功即结束本任务。
+    接着之前的进度完成起草，调用 pm_draft 提交决策表，成功即结束本任务。
 vote:
   goalTools: [pm_vote]
   opening: |

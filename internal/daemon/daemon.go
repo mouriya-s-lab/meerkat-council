@@ -193,7 +193,7 @@ func (d *Daemon) start(ctx context.Context, r record, start queue.Start, humans 
 	lp := &livePanel{number: r.issue.Number, ref: r.issue.Ref, human: r.issue.Kind == queue.KindHuman, cancel: cancel, done: make(chan struct{})}
 	d.live[lp.number] = lp
 	job := panel.Job{
-		Ref: r.issue.Ref, ItemID: r.itemID, Agenda: r.issue.Agenda, Human: lp.human, Start: start,
+		Ref: r.issue.Ref, ItemID: r.itemID, Agenda: r.issue.Agenda, Start: start,
 		HumanIssues: slices.Clone(humans),
 	}
 	slog.Info("panel starting", "issue", lp.ref, "start", start)

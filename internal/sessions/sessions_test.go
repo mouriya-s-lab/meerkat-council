@@ -47,7 +47,7 @@ func TestList(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"pm_draft", "pm_block"}}, Vote: config.Goal{GoalTools: []string{"pm_vote"}}}
+	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"pm_draft"}}, Vote: config.Goal{GoalTools: []string{"pm_vote"}}}
 	reg := NewRegistry()
 	reg.failures["s-failed"] = "omp exited"
 

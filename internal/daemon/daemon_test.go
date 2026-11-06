@@ -184,10 +184,10 @@ func TestScheduleInterruptsForHumanIssue(t *testing.T) {
 		}
 	}
 	j := <-fp.started
-	if j.Ref != "o/pm#4" || !j.Human || j.Start != queue.StartConvene || len(j.HumanIssues) != 1 || j.HumanIssues[0].Decided {
+	if j.Ref != "o/pm#4" || j.Start != queue.StartConvene || len(j.HumanIssues) != 1 || j.HumanIssues[0].Decided {
 		t.Fatalf("human job = %+v", j)
 	}
-	if len(d.live) != 1 || d.live[4] == nil {
+	if len(d.live) != 1 || d.live[4] == nil || !d.live[4].human {
 		t.Fatalf("live after interrupt = %v", d.live)
 	}
 }

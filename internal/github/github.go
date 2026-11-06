@@ -315,9 +315,8 @@ func (c *Client) BlockedBy(ctx context.Context, repo string, number int) ([]Issu
 	return refs, nil
 }
 
-// Issue is an issue's numeric id, title and body.
+// Issue is an issue's title and body.
 type Issue struct {
-	ID    int64
 	Title string
 	Body  string
 }
@@ -325,14 +324,13 @@ type Issue struct {
 // Issue reads an issue.
 func (c *Client) Issue(ctx context.Context, repo string, number int) (Issue, error) {
 	var is struct {
-		ID    int64   `json:"id"`
 		Title string  `json:"title"`
 		Body  *string `json:"body"`
 	}
 	if err := c.rest.DoWithContext(ctx, http.MethodGet, fmt.Sprintf("repos/%s/issues/%d", repo, number), nil, &is); err != nil {
 		return Issue{}, fmt.Errorf("issue %s#%d: %w", repo, number, err)
 	}
-	out := Issue{ID: is.ID, Title: is.Title}
+	out := Issue{Title: is.Title}
 	if is.Body != nil {
 		out.Body = *is.Body
 	}
@@ -363,19 +361,6 @@ func (c *Client) PostComment(ctx context.Context, repo string, number int, body 
 		return 0, fmt.Errorf("comment on %s#%d: %w", repo, number, err)
 	}
 	return cm.ID, nil
-}
-
-// AddBlockedBy adds the issue with numeric id blockerID to the issue's "Blocked by" relations.
-func (c *Client) AddBlockedBy(ctx context.Context, repo string, number int, blockerID int64) error {
-	b, err := json.Marshal(map[string]int64{"issue_id": blockerID})
-	if err != nil {
-		return err
-	}
-	var res json.RawMessage
-	if err := c.rest.DoWithContext(ctx, http.MethodPost, fmt.Sprintf("repos/%s/issues/%d/dependencies/blocked_by", repo, number), bytes.NewReader(b), &res); err != nil {
-		return fmt.Errorf("blocked_by of %s#%d: %w", repo, number, err)
-	}
-	return nil
 }
 
 // SetText sets a text field of a Project item.

@@ -77,6 +77,7 @@ func TestLoadErrors(t *testing.T) {
 		{"missing resume", "council/council.yaml", "resume: fork\n", "", "council/council.yaml: resume: missing"},
 		{"bad resume", "council/council.yaml", "resume: fork", "resume: restart", `council/council.yaml: resume: "restart" is not one of fork, fresh`},
 		{"foreign goal tool", "council/goals.yaml", "goalTools: [pm_vote]", "goalTools: [pm_draft]", `council/goals.yaml: vote.goalTools[0]: "pm_draft" is not a vote goal tool`},
+		{"removed goal tool", "council/goals.yaml", "goalTools: [pm_draft]", "goalTools: [pm_draft, pm_block]", `council/goals.yaml: draft.goalTools[1]: "pm_block" is not a draft goal tool`},
 		{"unknown template field", "council/goals.yaml", "{{.Ref}}（议程编号 {{.Agenda}}", "{{.Issue}}（议程编号 {{.Agenda}}", "council/goals.yaml: draft.opening"},
 		{"unguarded escalation", "council/goals.yaml", "{{if .Escalation}}", "{{.Escalation.Issue}}{{if .Escalation}}", "council/goals.yaml: draft.opening"},
 		{"missing continue", "council/goals.yaml", "  continue: 你还没有成功调用 pm_vote。审查决策表的每一行，调用 pm_vote 交出本席位的票；若工具返回错误，按错误修正后重试。", `  continue: ""`, "council/goals.yaml: vote.continue: missing"},

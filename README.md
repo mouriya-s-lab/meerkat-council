@@ -44,7 +44,7 @@ After every queue publication the daemon applies, in order:
 A panel keeps no progress of its own. Before every step it re-reads the issue and derives the step from its markers: the round is the latest `pm:panel` round; without a `pm:draft` of that round it runs the draft session of the seat with the `draft` right; with draft version `v` it runs, concurrently, a vote session for every seat with the `vote` right and no `pm:vote` on `v`; when every voting seat has voted it ends and the issue waits for the tally.
 
 - **Convene:** `Status` set to the in-progress option, then `pm:panel started` round 1.
-- **Draft session:** ends with `pm_draft`, posted as `pm:draft` with the next version, or `pm_block` (agenda issues only): the issue gets "Blocked by" the undecided human issue, `Status` the todo option, then `pm:panel blocked` with `prereq`, and the panel ends.
+- **Draft session:** ends with `pm_draft`, posted as `pm:draft` with the next version. "Blocked by" relations are written only by humans; the panel never writes them.
 - **Vote session:** each `pm_vote` goes to the tally component, which posts `pm:vote` for the seat and version.
 - **Failure:** a session that ends without a goal tool kills the issue's other sessions, and the panel posts `pm:panel failed` with omp's error text and `sessions: []` (only `interrupted` lists sessions); the daemon log names the sessions that were running.
 - **Resume:** `pm:panel resumed` (same round), posted only when a draft or vote step is open. With `resume: fork`, each session listed in the latest `pm:panel interrupted` whose step is still open restarts as `omp --fork <its file>` with the kind's `resume` prompt; other steps, and `resume: fresh`, start new sessions. Right before posting, the issue is re-read: a draft for a round that already has one, or a vote of a seat that already voted on that version, is dropped.
@@ -53,14 +53,13 @@ Seat sessions: `omp --mode rpc` with the seat's `model`, `prompt` file as system
 
 ## Plugin
 
-`plugin/index.ts`, loaded with `--trusted-extension`. The program sets `PM_KIND`, `PM_GOAL_TOOLS`, `PM_CONTINUE`, `PM_META`, `PM_GUARDIANS_URL` and `PM_CONTEXT`, a JSON file written before each session under `sessionsDir/<n>/context/` with the issue ref, the seat, its rights, whether the issue is human, the PM repository, the code/design/omp repositories of `shared/repos.yaml`, the seat's `proxy-readers.yaml` entry, every human issue of the queue with whether it is decided, the draft (vote sessions) and the issue body's `pm:escalation` marker. `GH_TOKEN` is inherited. The plugin only reads; the program takes goal tool arguments from the RPC event stream and writes GitHub. An invalid call throws: the tool result is an error, the goal does not count and the session continues.
+`plugin/index.ts`, loaded with `--trusted-extension`. The program sets `PM_KIND`, `PM_GOAL_TOOLS`, `PM_CONTINUE`, `PM_META`, `PM_GUARDIANS_URL` and `PM_CONTEXT`, a JSON file written before each session under `sessionsDir/<n>/context/` with the issue ref, the seat, its rights, the PM repository, the code/design/omp repositories of `shared/repos.yaml`, the seat's `proxy-readers.yaml` entry, every human issue of the queue with whether it is decided, the draft (vote sessions) and the issue body's `pm:escalation` marker. `GH_TOKEN` is inherited. The plugin only reads; the program takes goal tool arguments from the RPC event stream and writes GitHub. An invalid call throws: the tool result is an error, the goal does not count and the session continues.
 
 | Tool | Kinds | Checks |
 |---|---|---|
 | `pm_read_issue {ref}` | all | `ref` is an issue of the PM repository; returns title, body and comments |
 | `pm_proxy_read {repo, question, model?}` | all | `model` (default the seat's `default`) is the seat's `default` or in `others`; `repo` belongs to one of the seat's `content` categories. Then `POST {guardiansURL}/v1/proxy-reads {seat, model, repo, question, agenda}`; the facts are the result; a non-200 answer is the error, verbatim |
 | `pm_draft {rows[], supersedes[], settle, withdrawn}` | draft | row ids non-empty and unique; rows empty only with `withdrawn`; `settle` required when the issue body has an escalation marker |
-| `pm_block {prereq, reason}` | draft | the issue is not human; `prereq` is an undecided human issue |
 | `pm_vote {rows[]}` | vote | exactly the draft's row ids, each once; `oppose` needs a `counterexample`; `veto` needs the `veto` right and a `citation` that is a human issue |
 
 ## HTTP API
@@ -121,7 +120,7 @@ Sessions: rows come from the omp session files under `sessionsDir` (header `sess
 
 `council/seats.yaml`: `seats[]` with `id` (`[A-Za-z0-9_-]+`, unique), `prompt` (system prompt file relative to `council/`, must exist; e.g. `omp/prompts/<id>.md`), `tools` (built-in tools kept), `model`, `rights` (subset of `draft`, `vote`, `veto`, `arbitrate`). Exactly one seat has `draft`; at least one has `vote`.
 
-`council/goals.yaml`: `draft` and `vote`, each with `goalTools` (draft: a subset of `pm_draft`, `pm_block`; vote: `pm_vote`), `opening` and `resume` (Go `text/template`s with `.Ref .Title .Body .Agenda .Round .Version .Draft` — the draft marker JSON for vote sessions, empty for draft — and `.Escalation`, nil or `{Issue, Ask, AskText}` where `AskText` is the ask comment's text), and `continue` (plain text). Templates are executed once with and once without an escalation at load, so an unknown field is a load error.
+`council/goals.yaml`: `draft` and `vote`, each with `goalTools` (draft: `pm_draft`; vote: `pm_vote`), `opening` and `resume` (Go `text/template`s with `.Ref .Title .Body .Agenda .Round .Version .Draft` — the draft marker JSON for vote sessions, empty for draft — and `.Escalation`, nil or `{Issue, Ask, AskText}` where `AskText` is the ask comment's text), and `continue` (plain text). Templates are executed once with and once without an escalation at load, so an unknown field is a load error.
 
 `council/proxy-readers.yaml`: `seats[]` with `seat` (a `seats.yaml` id), `default` (model), `others` (models, may be `[]`), `content` (non-empty subset of `code`, `design`, `omp`), `note`. Every seat with `draft` or `vote` has an entry. Every model named here must have a base in pm-guardians `bases.yaml`.
 

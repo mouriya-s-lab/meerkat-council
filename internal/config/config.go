@@ -128,7 +128,6 @@ const (
 	ToolReadIssue = "pm_read_issue"
 	ToolProxyRead = "pm_proxy_read"
 	ToolDraft     = "pm_draft"
-	ToolBlock     = "pm_block"
 	ToolVote      = "pm_vote"
 )
 
@@ -136,7 +135,7 @@ const (
 func (k SessionKind) PluginTools() []string {
 	switch k {
 	case KindDraft:
-		return []string{ToolReadIssue, ToolProxyRead, ToolDraft, ToolBlock}
+		return []string{ToolReadIssue, ToolProxyRead, ToolDraft}
 	case KindVote:
 		return []string{ToolReadIssue, ToolProxyRead, ToolVote}
 	}
@@ -147,7 +146,7 @@ func (k SessionKind) PluginTools() []string {
 func (k SessionKind) goalCapable() []string {
 	switch k {
 	case KindDraft:
-		return []string{ToolDraft, ToolBlock}
+		return []string{ToolDraft}
 	case KindVote:
 		return []string{ToolVote}
 	}

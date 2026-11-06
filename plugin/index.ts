@@ -28,7 +28,6 @@ interface Context {
 	ref: string;
 	seat: string;
 	rights: string[];
-	human: boolean;
 	pmRepo: string;
 	repos: Record<Content, string[]>;
 	proxy: { seat: string; default: string; others: string[]; content: Content[]; note: string };
@@ -212,27 +211,6 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 					throw new Error(`settle required: ${ctx.escalation.issue} ask ${ctx.escalation.ask}`);
 				}
 				return recorded("pm_draft");
-			},
-		});
-		pi.registerTool({
-			name: "pm_block",
-			label: "Block on human issue",
-			description:
-				"Instead of drafting, record that this agenda issue must wait for an undecided human issue; a successful call ends your task.",
-			parameters: z.object({
-				prereq: z.string().describe("Ref of the undecided human issue this agenda issue waits for"),
-				reason: z.string().describe("Why the agenda issue cannot be decided before it"),
-			}),
-			loadMode: "essential",
-			approval: "read",
-			async execute(_id, params) {
-				if (ctx.human) throw new Error(`pm_block is only for agenda issues; ${ctx.ref} is a human issue`);
-				const pre = ctx.humanIssues.find(h => sameRef(h.ref, params.prereq));
-				const open = ctx.humanIssues.filter(h => !h.decided).map(h => h.ref);
-				if (!pre || pre.decided) {
-					throw new Error(`prereq ${params.prereq} is not an undecided human issue; undecided human issues: [${open.join(", ")}]`);
-				}
-				return recorded("pm_block");
 			},
 		});
 	} else {

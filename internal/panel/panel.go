@@ -31,7 +31,6 @@ type GitHub interface {
 	Comment(ctx context.Context, repo string, id int64) (string, error)
 	Comments(ctx context.Context, repo string, number int) ([]string, error)
 	PostComment(ctx context.Context, repo string, number int, body string) (int64, error)
-	AddBlockedBy(ctx context.Context, repo string, number int, blockerID int64) error
 	SetOption(ctx context.Context, projectID, itemID, fieldID, optionID string) error
 }
 
@@ -54,7 +53,6 @@ type Job struct {
 	Ref         queue.Ref
 	ItemID      string // Project item id
 	Agenda      string // Agenda field
-	Human       bool
 	Start       queue.Start
 	HumanIssues []HumanIssue
 }
@@ -130,7 +128,7 @@ func Derive(ms []markers.Marker, voters []string) Step {
 	return st
 }
 
-// Run runs the panel until it waits for the tally, is blocked, fails or ctx ends. A failure is
+// Run runs the panel until it waits for the tally, fails or ctx ends. A failure is
 // posted as pm:panel failed; cancellation with cause ErrInterrupted as pm:panel interrupted; any
 // other cancellation (the daemon stopping) posts nothing.
 func (r *Runner) Run(ctx context.Context, j Job) {
@@ -243,8 +241,7 @@ func (p *run) run(ctx context.Context) (int, []markers.PanelSession, error) {
 			slog.Info("panel: every seat voted; waiting for the tally", "issue", p.job.Ref, "version", st.Version)
 			return st.Round, nil, nil
 		case StepDraft:
-			blocked, open, err := p.draft(ctx, st, is, forks)
-			if err != nil || blocked {
+			if open, err := p.draft(ctx, st, is, forks); err != nil {
 				return st.Round, open, err
 			}
 		case StepVote:
@@ -301,27 +298,23 @@ func (p *run) read(ctx context.Context) (issue, error) {
 	return is, nil
 }
 
-// draft runs the draft session and acts on its goal tool. blocked reports that the panel ended
-// with pm_block.
-func (p *run) draft(ctx context.Context, st Step, is issue, forks []markers.PanelSession) (blocked bool, open []markers.PanelSession, err error) {
+// draft runs the draft session and posts its pm_draft.
+func (p *run) draft(ctx context.Context, st Step, is issue, forks []markers.PanelSession) ([]markers.PanelSession, error) {
 	seat := p.cfg.DraftSeat()
 	var ps *markers.PanelSession
 	res, err := p.session(ctx, config.KindDraft, seat, st, is, fork(forks, config.KindDraft, seat.ID), func(s markers.PanelSession) { ps = &s })
 	if err != nil {
+		var open []markers.PanelSession
 		if ps != nil {
 			open = []markers.PanelSession{*ps}
 		}
-		return false, open, err
+		return open, err
+	}
+	if res.ToolName != config.ToolDraft {
+		return nil, fmt.Errorf("draft session %s ended with %s, not %s", res.SessionID, res.ToolName, config.ToolDraft)
 	}
 	// The result is recorded even when an interrupt arrives meanwhile: the session is over.
-	w := context.WithoutCancel(ctx)
-	switch res.ToolName {
-	case config.ToolDraft:
-		return false, nil, p.postDraft(w, st, res)
-	case config.ToolBlock:
-		return true, nil, p.block(w, st, res)
-	}
-	return false, nil, fmt.Errorf("draft session %s ended with %s, not a draft goal tool", res.SessionID, res.ToolName)
+	return nil, p.postDraft(context.WithoutCancel(ctx), st, res)
 }
 
 type draftArgs struct {
@@ -366,48 +359,6 @@ func (p *run) postDraft(ctx context.Context, st Step, res sessions.Result) error
 		return err
 	}
 	slog.Info("draft posted", "issue", p.job.Ref, "version", d.Version, "comment", id, "session", res.SessionID)
-	return nil
-}
-
-type blockArgs struct {
-	Prereq string `json:"prereq"`
-	Reason string `json:"reason"`
-}
-
-// block records the issue as waiting for an undecided human issue: Blocked by, Status=Todo, then
-// pm:panel blocked.
-func (p *run) block(ctx context.Context, st Step, res sessions.Result) error {
-	var a blockArgs
-	if err := json.Unmarshal(res.Args, &a); err != nil {
-		return fmt.Errorf("%s arguments of session %s: %w", res.ToolName, res.SessionID, err)
-	}
-	if p.job.Human {
-		return fmt.Errorf("session %s blocked human issue %s", res.SessionID, p.job.Ref)
-	}
-	i := slices.IndexFunc(p.job.HumanIssues, func(h HumanIssue) bool { return strings.EqualFold(string(h.Ref), strings.TrimSpace(a.Prereq)) })
-	if i < 0 || p.job.HumanIssues[i].Decided {
-		return fmt.Errorf("session %s blocked on %q, not an undecided human issue", res.SessionID, a.Prereq)
-	}
-	prereq := p.job.HumanIssues[i].Ref
-	preRepo, preN, _ := queue.ParseRef(string(prereq))
-	pre, err := p.gh.Issue(ctx, preRepo, preN)
-	if err != nil {
-		return err
-	}
-	if err := p.gh.AddBlockedBy(ctx, p.repo, p.number, pre.ID); err != nil {
-		return err
-	}
-	todo := p.cfg.Project.Fields.Status.Options.Todo
-	if err := p.gh.SetOption(ctx, p.project.ID, p.job.ItemID, p.project.Status.ID, p.project.Status.Options[todo]); err != nil {
-		return fmt.Errorf("set %s: %w", todo, err)
-	}
-	ref := string(prereq)
-	pm := markers.Panel{Event: markers.PanelBlocked, Round: st.Round, Sessions: []markers.PanelSession{}, Prereq: &ref}
-	text := fmt.Sprintf("小组结束：本议题须等待人类议题 %s 定案后再审议。\n\n%s", prereq, a.Reason)
-	if err := p.postPanel(ctx, pm, text); err != nil {
-		return err
-	}
-	slog.Info("panel blocked", "issue", p.job.Ref, "prereq", prereq, "session", res.SessionID)
 	return nil
 }
 
@@ -492,7 +443,6 @@ type sessionContext struct {
 	Ref         queue.Ref           `json:"ref"`
 	Seat        string              `json:"seat"`
 	Rights      []config.Right      `json:"rights"`
-	Human       bool                `json:"human"`
 	PMRepo      string              `json:"pmRepo"`
 	Repos       contextRepos        `json:"repos"`
 	Proxy       config.ProxyReader  `json:"proxy"`
@@ -542,7 +492,7 @@ func (p *run) session(ctx context.Context, kind config.SessionKind, seat config.
 		humans = []HumanIssue{}
 	}
 	sc := sessionContext{
-		Ref: p.job.Ref, Seat: seat.ID, Rights: seat.Rights, Human: p.job.Human, PMRepo: p.cfg.Repos.PM.Repo,
+		Ref: p.job.Ref, Seat: seat.ID, Rights: seat.Rights, PMRepo: p.cfg.Repos.PM.Repo,
 		Repos: contextRepos{Code: []string{}, Design: p.cfg.Repos.Design, OMP: p.cfg.Repos.OMP},
 		Proxy: proxy, HumanIssues: humans, Draft: draft, Escalation: is.escalation,
 	}
