@@ -1,0 +1,21 @@
+seats:
+  - id: Coordination
+    prompt: omp/prompts/Coordination.md
+    tools: [read, grep, glob, find]
+    model: futureppo-pool/minimax-m3.1-flash
+    rights: [draft, vote]
+  - id: ClaudeHigh
+    prompt: omp/prompts/ClaudeHigh.md
+    tools: [read, grep, glob, find]
+    model: futureppo-pool/minimax-m3.1-flash
+    rights: [vote]
+  - id: Argon
+    prompt: omp/prompts/Argon.md
+    tools: [read, grep, glob, find]
+    model: futureppo-pool/minimax-m3.1-flash
+    rights: [vote, veto]
+  - id: LeadMentor
+    prompt: omp/prompts/LeadMentor.md
+    tools: [read, grep, glob, find]
+    model: futureppo-pool/minimax-m3.1-flash
+    rights: [vote, arbitrate]

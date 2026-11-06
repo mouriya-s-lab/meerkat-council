@@ -1,0 +1,319 @@
+// Package queue derives the agenda queue from a snapshot of the PM repository: which agenda
+// issues exist, which are human, which have a panel, which wait on an undecided human
+// prerequisite, which are decided or superseded (contract §1, §A, §C; box
+// pm_councilProgram_queue). Pure functions; no IO.
+package queue
+
+import (
+	"cmp"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/oh-my-omp/pm-council/internal/markers"
+)
+
+// Ref is an issue reference, "owner/repo#n".
+type Ref string
+
+// FormatRef builds the Ref of issue number n in repo "owner/name".
+func FormatRef(repo string, n int) Ref { return Ref(fmt.Sprintf("%s#%d", repo, n)) }
+
+// ParseRef splits "owner/repo#n" into its repository and number.
+func ParseRef(s string) (repo string, n int, ok bool) {
+	repo, num, ok := strings.Cut(s, "#")
+	if !ok || strings.Count(repo, "/") != 1 || strings.HasPrefix(repo, "/") || strings.HasSuffix(repo, "/") {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(num)
+	if err != nil || n <= 0 {
+		return "", 0, false
+	}
+	return repo, n, true
+}
+
+// Kind is the semantic Project Kind of an issue.
+type Kind int
+
+const (
+	KindNone Kind = iota // no Kind set: not on the agenda
+	KindHuman
+	KindAgenda
+	KindImplementation
+)
+
+// Status is the semantic Project Status of an issue.
+type Status int
+
+const (
+	StatusNone Status = iota // no Status set
+	StatusTodo
+	StatusInProgress
+	StatusDone
+	StatusSuperseded
+)
+
+// Issue is one PM-repository issue in the Project, as read from GitHub.
+type Issue struct {
+	Ref    Ref
+	Number int
+	Kind   Kind
+	Status Status
+	// StatusName is the GitHub option name of Status; empty when unset.
+	StatusName string
+	// Agenda is the Agenda field text; empty when unset.
+	Agenda    string
+	BlockedBy []Ref
+	// Markers are the council markers of the issue's comments, oldest first.
+	Markers []markers.Marker
+}
+
+// Seat is what the queue needs to know about a council seat.
+type Seat struct {
+	ID      string
+	CanVote bool
+}
+
+// Snapshot is the PM repository as read in one rebuild.
+type Snapshot struct {
+	Issues       []Issue
+	Seats        []Seat
+	AgendaPrefix string
+}
+
+// State is why an agenda issue can or cannot be convened now (§C), in decision order.
+type State string
+
+const (
+	StateDecided      State = "decided"
+	StateSuperseded   State = "superseded"
+	StateBlocked      State = "blocked"
+	StateHeld         State = "held"
+	StateDeliberating State = "deliberating"
+	StateInterrupted  State = "interrupted"
+	StateFailed       State = "failed"
+	StateReady        State = "ready"
+)
+
+// Entry is one row of GET /v1/queue.
+type Entry struct {
+	Ref       Ref      `json:"ref"`
+	Agenda    *string  `json:"agenda"`
+	Kind      string   `json:"kind"`
+	Status    *string  `json:"status"`
+	BlockedBy []Ref    `json:"blockedBy"`
+	State     State    `json:"state"`
+	Notes     []string `json:"notes"`
+	Panel     *Panel   `json:"panel"`
+
+	human  bool
+	number int // agenda number, 0 when absent or of another prefix
+	issue  int
+}
+
+// Panel is a panel's progress derived from pm:panel, pm:draft and pm:vote markers.
+type Panel struct {
+	Round   int      `json:"round"`
+	Version *int     `json:"version"`
+	Votes   []string `json:"votes"`
+	Pending []string `json:"pending"`
+}
+
+// Queue is the agenda issues in convening order: human issues first, then by agenda number.
+type Queue []Entry
+
+// §C kind values.
+const (
+	kindHuman  = "Human"
+	kindAgenda = "Agenda"
+)
+
+// Build derives the queue. Issues whose Kind is neither human nor agenda are not on it.
+func Build(s Snapshot) Queue {
+	byRef := make(map[Ref]*Issue, len(s.Issues))
+	for i := range s.Issues {
+		byRef[s.Issues[i].Ref] = &s.Issues[i]
+	}
+	humanPending := false
+	for _, is := range s.Issues {
+		if is.Kind == KindHuman && !decided(is) {
+			humanPending = true
+		}
+	}
+	q := Queue{}
+	for _, is := range s.Issues {
+		if is.Kind != KindHuman && is.Kind != KindAgenda {
+			continue
+		}
+		e := Entry{
+			Ref:       is.Ref,
+			Kind:      kindAgenda,
+			BlockedBy: []Ref{},
+			Notes:     []string{},
+			human:     is.Kind == KindHuman,
+			number:    AgendaNumber(s.AgendaPrefix, is.Agenda),
+			issue:     is.Number,
+		}
+		if e.human {
+			e.Kind = kindHuman
+		}
+		if is.Agenda != "" {
+			e.Agenda = new(is.Agenda)
+		}
+		if is.StatusName != "" {
+			e.Status = new(is.StatusName)
+		}
+		waiting := false
+		for _, p := range is.BlockedBy {
+			pre, ok := byRef[p]
+			if !ok || pre.Kind != KindHuman {
+				e.Notes = append(e.Notes, fmt.Sprintf("Blocked by %s ignored: not a human issue in the Project", p))
+				continue
+			}
+			e.BlockedBy = append(e.BlockedBy, p)
+			if !decided(*pre) {
+				waiting = true
+			}
+		}
+		e.Panel = panel(is.Markers, s.Seats)
+		e.State = state(is, waiting, humanPending)
+		q = append(q, e)
+	}
+	slices.SortStableFunc(q, compare)
+	return q
+}
+
+func state(is Issue, waiting, humanPending bool) State {
+	switch {
+	case decided(is):
+		return StateDecided
+	case superseded(is):
+		return StateSuperseded
+	case waiting:
+		return StateBlocked
+	case is.Kind != KindHuman && humanPending:
+		return StateHeld
+	}
+	if p, ok := lastPanel(is.Markers); ok {
+		switch p.Event {
+		case markers.PanelStarted, markers.PanelResumed:
+			return StateDeliberating
+		case markers.PanelInterrupted:
+			return StateInterrupted
+		case markers.PanelFailed:
+			return StateFailed
+		case markers.PanelBlocked:
+			// The block itself is a Blocked by relation; once its prerequisite is decided the
+			// issue can be convened again.
+		}
+	}
+	return StateReady
+}
+
+func decided(is Issue) bool {
+	return is.Status == StatusDone || hasKind(is.Markers, markers.KindDecision)
+}
+
+func superseded(is Issue) bool {
+	return is.Status == StatusSuperseded || hasKind(is.Markers, markers.KindSuperseded)
+}
+
+func hasKind(ms []markers.Marker, k markers.Kind) bool {
+	return slices.ContainsFunc(ms, func(m markers.Marker) bool { return m.Kind() == k })
+}
+
+func lastPanel(ms []markers.Marker) (markers.Panel, bool) {
+	for i := len(ms) - 1; i >= 0; i-- {
+		if p, ok := ms[i].(markers.Panel); ok {
+			return p, true
+		}
+	}
+	return markers.Panel{}, false
+}
+
+// panel derives the panel progress: round of the latest pm:panel, the highest draft version,
+// the seats that voted on it, and the voting seats that have not. Nil without a pm:panel.
+func panel(ms []markers.Marker, seats []Seat) *Panel {
+	last, ok := lastPanel(ms)
+	if !ok {
+		return nil
+	}
+	p := &Panel{Round: last.Round, Votes: []string{}, Pending: []string{}}
+	for _, m := range ms {
+		if d, ok := m.(markers.Draft); ok && (p.Version == nil || d.Version > *p.Version) {
+			p.Version = new(d.Version)
+		}
+	}
+	voted := map[string]bool{}
+	if p.Version != nil {
+		for _, m := range ms {
+			if v, ok := m.(markers.Vote); ok && v.Version == *p.Version && !voted[v.Seat] {
+				voted[v.Seat] = true
+				p.Votes = append(p.Votes, v.Seat)
+			}
+		}
+	}
+	for _, s := range seats {
+		if s.CanVote && !voted[s.ID] {
+			p.Pending = append(p.Pending, s.ID)
+		}
+	}
+	return p
+}
+
+// compare orders human issues first, then by agenda number (issues without one last), then by
+// issue number. All entries are issues of the one PM repository.
+func compare(a, b Entry) int {
+	if a.human != b.human {
+		if a.human {
+			return -1
+		}
+		return 1
+	}
+	if (a.number == 0) != (b.number == 0) {
+		if a.number == 0 {
+			return 1
+		}
+		return -1
+	}
+	if c := cmp.Compare(a.number, b.number); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.issue, b.issue)
+}
+
+// AgendaNumber parses "<prefix><n>" and returns n, or 0 when agenda does not have that form.
+func AgendaNumber(prefix, agenda string) int {
+	rest, ok := strings.CutPrefix(agenda, prefix)
+	if !ok || rest == "" || rest[0] == '0' {
+		return 0
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// Pickable returns the issues that may be convened now: ready ones in queue order, at most
+// maxConcurrent minus the panels already deliberating.
+func Pickable(q Queue, maxConcurrent int) []Ref {
+	slots := maxConcurrent
+	for _, e := range q {
+		if e.State == StateDeliberating {
+			slots--
+		}
+	}
+	var out []Ref
+	for _, e := range q {
+		if slots <= 0 {
+			break
+		}
+		if e.State == StateReady {
+			out = append(out, e.Ref)
+			slots--
+		}
+	}
+	return out
+}
