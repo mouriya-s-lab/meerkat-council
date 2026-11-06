@@ -1,0 +1,2 @@
+agenda: { prefix: D, first: 1 }
+maxConcurrentPanels: 2

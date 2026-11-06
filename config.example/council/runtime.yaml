@@ -1,0 +1,17 @@
+app:
+  listen: 127.0.0.1:7420
+  webhookSecretFile: /Users/mouriya/Ext/work/pm-council-local/webhook-secret
+  daemonURL: http://127.0.0.1:7421
+daemon:
+  listen: 127.0.0.1:7421
+  rebuildIntervalSeconds: 60
+sessionsDir: /Users/mouriya/Ext/work/pm-council-local/sessions
+checkoutDir: /Users/mouriya/Ext/work/pm-council-local/checkouts
+guardiansURL: http://127.0.0.1:7410
+omp:
+  executable: omp
+  agentDir: /Users/mouriya/Ext/work/pm-council-local/omp
+  extension: /Users/mouriya/Ext/code/omomp/pm-council/plugin/index.ts
+  readyTimeoutSeconds: 120
+  exitGraceSeconds: 30
+maxContinuePrompts: 50

@@ -1,0 +1,5 @@
+fields:
+  status:   { name: Status,   options: { todo: Todo, inProgress: In Progress, done: Done, superseded: Superseded } }
+  kind:     { name: Kind,     options: { human: Human, agenda: Agenda, implementation: Implementation } }
+  agenda:   { name: Agenda }
+  proposer: { name: Proposer, options: { human: Human, guardians: Guardians, coordination: Coordination } }
