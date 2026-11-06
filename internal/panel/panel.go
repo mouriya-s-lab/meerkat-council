@@ -144,27 +144,42 @@ func (r *Runner) Run(ctx context.Context, j Job) {
 	if err == nil {
 		return
 	}
-	w := context.WithoutCancel(ctx)
-	if open == nil {
-		open = []markers.PanelSession{}
-	}
-	switch {
-	case errors.Is(context.Cause(ctx), ErrInterrupted):
-		slog.Info("panel interrupted", "issue", j.Ref, "killed", len(open))
-		pm := markers.Panel{Event: markers.PanelInterrupted, Round: round, Sessions: open}
-		if err := p.postPanel(w, pm, fmt.Sprintf("小组因人类议题被中止（第 %d 轮）；被中止的会话列在标记里，定案后按配置恢复。", round)); err != nil {
-			slog.Error("panel: post interrupted failed", "issue", j.Ref, "err", err)
-		}
-	case ctx.Err() != nil:
+	pm, post := endMarker(context.Cause(ctx), err, round, open)
+	if !post {
 		slog.Info("panel stopped with the daemon", "issue", j.Ref, "err", err)
-	default:
-		slog.Error("panel failed", "issue", j.Ref, "err", err)
-		reason := err.Error()
-		pm := markers.Panel{Event: markers.PanelFailed, Round: round, Sessions: open, Error: &reason}
-		if err := p.postPanel(w, pm, fmt.Sprintf("小组失败（第 %d 轮）：\n\n```text\n%s\n```", round, reason)); err != nil {
-			slog.Error("panel: post failed failed", "issue", j.Ref, "err", err)
-		}
+		return
 	}
+	var text string
+	switch pm.Event {
+	case markers.PanelInterrupted:
+		slog.Info("panel interrupted", "issue", j.Ref, "killed", open)
+		text = fmt.Sprintf("小组因人类议题被中止（第 %d 轮）；被中止的会话列在标记里，定案后按配置恢复。", round)
+	case markers.PanelFailed:
+		slog.Error("panel failed", "issue", j.Ref, "err", err, "running", open)
+		text = fmt.Sprintf("小组失败（第 %d 轮）：\n\n```text\n%s\n```", round, *pm.Error)
+	case markers.PanelStarted, markers.PanelResumed, markers.PanelBlocked:
+		panic(fmt.Sprintf("panel end marker %q", pm.Event))
+	}
+	if err := p.postPanel(context.WithoutCancel(ctx), pm, text); err != nil {
+		slog.Error("panel: post failed", "issue", j.Ref, "event", pm.Event, "err", err)
+	}
+}
+
+// endMarker is the pm:panel a run that ended with err posts, given ctx's cancel cause: interrupted
+// with the killed sessions, or failed with the error and no sessions (contract §A: sessions only
+// for interrupted). post is false when the daemon stopped the panel.
+func endMarker(cause, err error, round int, open []markers.PanelSession) (pm markers.Panel, post bool) {
+	switch {
+	case errors.Is(cause, ErrInterrupted):
+		if open == nil {
+			open = []markers.PanelSession{}
+		}
+		return markers.Panel{Event: markers.PanelInterrupted, Round: round, Sessions: open}, true
+	case cause != nil:
+		return markers.Panel{}, false
+	}
+	reason := err.Error()
+	return markers.Panel{Event: markers.PanelFailed, Round: round, Sessions: []markers.PanelSession{}, Error: &reason}, true
 }
 
 // run is one panel run of one issue.

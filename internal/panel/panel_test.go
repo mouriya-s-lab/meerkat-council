@@ -1,11 +1,41 @@
 package panel
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/oh-my-omp/pm-council/internal/markers"
 )
+
+func TestEndMarker(t *testing.T) {
+	killed := []markers.PanelSession{{Seat: "Argon", Kind: "vote", Session: "s1", File: "/x/s1.jsonl"}}
+	reason := "omp exited before a goal tool [pm_vote] succeeded: boom"
+	for _, tc := range []struct {
+		name  string
+		cause error
+		open  []markers.PanelSession
+		want  markers.Panel
+		post  bool
+	}{
+		{"interrupted lists the killed sessions", fmt.Errorf("wrapped: %w", ErrInterrupted), killed,
+			markers.Panel{Event: markers.PanelInterrupted, Round: 2, Sessions: killed}, true},
+		{"interrupted with none killed", ErrInterrupted, nil,
+			markers.Panel{Event: markers.PanelInterrupted, Round: 2, Sessions: []markers.PanelSession{}}, true},
+		{"failed carries the error and no sessions", nil, killed,
+			markers.Panel{Event: markers.PanelFailed, Round: 2, Sessions: []markers.PanelSession{}, Error: &reason}, true},
+		{"daemon stopping posts nothing", context.Canceled, killed, markers.Panel{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, post := endMarker(tc.cause, errors.New(reason), 2, tc.open)
+			if post != tc.post || !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("endMarker = %+v %v, want %+v %v", got, post, tc.want, tc.post)
+			}
+		})
+	}
+}
 
 func TestDerive(t *testing.T) {
 	voters := []string{"Coordination", "ClaudeHigh", "Argon"}
