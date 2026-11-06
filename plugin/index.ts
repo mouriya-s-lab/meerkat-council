@@ -156,12 +156,16 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 					`repo ${params.repo} is not readable by seat ${ctx.seat}: proxy-readers.yaml content [${ctx.proxy.content.join(", ")}] covers [${proxyRepos.join(", ")}]`,
 				);
 			}
-			const res = await fetch(`${guardiansURL}/v1/proxy-reads`, {
+			// A proxy read is a whole guardian session and may outlast Bun's default fetch timeout;
+			// the call ends with the guardians' answer or with the tool's abort signal.
+			const init: RequestInit & { timeout: false } = {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ seat: ctx.seat, model, repo: params.repo, question: params.question, agenda: ctx.ref }),
 				signal,
-			});
+				timeout: false,
+			};
+			const res = await fetch(`${guardiansURL}/v1/proxy-reads`, init);
 			const text = await res.text();
 			if (res.status !== 200) throw new Error(`pm-guardians ${res.status}: ${text}`);
 			const body = JSON.parse(text) as { session: string; facts: string };
