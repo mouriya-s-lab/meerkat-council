@@ -3,6 +3,7 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -312,6 +313,69 @@ func (c *Client) BlockedBy(ctx context.Context, repo string, number int) ([]Issu
 		refs = append(refs, IssueRef{Repo: r, Number: i.Number})
 	}
 	return refs, nil
+}
+
+// Issue is an issue's numeric id, title and body.
+type Issue struct {
+	ID    int64
+	Title string
+	Body  string
+}
+
+// Issue reads an issue.
+func (c *Client) Issue(ctx context.Context, repo string, number int) (Issue, error) {
+	var is struct {
+		ID    int64   `json:"id"`
+		Title string  `json:"title"`
+		Body  *string `json:"body"`
+	}
+	if err := c.rest.DoWithContext(ctx, http.MethodGet, fmt.Sprintf("repos/%s/issues/%d", repo, number), nil, &is); err != nil {
+		return Issue{}, fmt.Errorf("issue %s#%d: %w", repo, number, err)
+	}
+	out := Issue{ID: is.ID, Title: is.Title}
+	if is.Body != nil {
+		out.Body = *is.Body
+	}
+	return out, nil
+}
+
+// Comment returns the body of the issue comment id in repo.
+func (c *Client) Comment(ctx context.Context, repo string, id int64) (string, error) {
+	var cm struct {
+		Body string `json:"body"`
+	}
+	if err := c.rest.DoWithContext(ctx, http.MethodGet, fmt.Sprintf("repos/%s/issues/comments/%d", repo, id), nil, &cm); err != nil {
+		return "", fmt.Errorf("comment %d of %s: %w", id, repo, err)
+	}
+	return cm.Body, nil
+}
+
+// PostComment posts a comment on the issue and returns its id.
+func (c *Client) PostComment(ctx context.Context, repo string, number int, body string) (int64, error) {
+	b, err := json.Marshal(map[string]string{"body": body})
+	if err != nil {
+		return 0, err
+	}
+	var cm struct {
+		ID int64 `json:"id"`
+	}
+	if err := c.rest.DoWithContext(ctx, http.MethodPost, fmt.Sprintf("repos/%s/issues/%d/comments", repo, number), bytes.NewReader(b), &cm); err != nil {
+		return 0, fmt.Errorf("comment on %s#%d: %w", repo, number, err)
+	}
+	return cm.ID, nil
+}
+
+// AddBlockedBy adds the issue with numeric id blockerID to the issue's "Blocked by" relations.
+func (c *Client) AddBlockedBy(ctx context.Context, repo string, number int, blockerID int64) error {
+	b, err := json.Marshal(map[string]int64{"issue_id": blockerID})
+	if err != nil {
+		return err
+	}
+	var res json.RawMessage
+	if err := c.rest.DoWithContext(ctx, http.MethodPost, fmt.Sprintf("repos/%s/issues/%d/dependencies/blocked_by", repo, number), bytes.NewReader(b), &res); err != nil {
+		return fmt.Errorf("blocked_by of %s#%d: %w", repo, number, err)
+	}
+	return nil
 }
 
 // SetText sets a text field of a Project item.

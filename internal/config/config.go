@@ -1,6 +1,7 @@
 // Package config loads and validates the council configuration under <config-root>:
-// council/{runtime,council,seats}.yaml and shared/{repos,project}.yaml.
-// Unknown keys and missing required keys are errors that name the file and the YAML key path.
+// council/{runtime,council,seats,goals,proxy-readers}.yaml, the seat prompt files and
+// shared/{repos,project}.yaml. Unknown keys and missing required keys are errors that name the
+// file and the YAML key path.
 package config
 
 import (
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/goccy/go-yaml"
@@ -21,11 +23,13 @@ import (
 
 // Config is the validated configuration.
 type Config struct {
-	Runtime Runtime
-	Council Council
-	Seats   []Seat
-	Repos   Repos
-	Project Project
+	Runtime      Runtime
+	Council      Council
+	Seats        []Seat
+	Goals        Goals
+	ProxyReaders []ProxyReader
+	Repos        Repos
+	Project      Project
 }
 
 type Runtime struct {
@@ -62,10 +66,25 @@ type OMP struct {
 	ExitGraceSeconds    int    `yaml:"exitGraceSeconds"`
 }
 
+// ReadyTimeout bounds the wait for an omp child's ready frame.
+func (o OMP) ReadyTimeout() time.Duration { return time.Duration(o.ReadyTimeoutSeconds) * time.Second }
+
+// ExitGrace is how long an omp child may take to exit after its stdin closes.
+func (o OMP) ExitGrace() time.Duration { return time.Duration(o.ExitGraceSeconds) * time.Second }
+
 type Council struct {
 	Agenda              Agenda `yaml:"agenda"`
 	MaxConcurrentPanels int    `yaml:"maxConcurrentPanels"`
+	Resume              Resume `yaml:"resume"`
 }
+
+// Resume is how a panel continues after an interrupt: fork the killed sessions or start fresh ones.
+type Resume string
+
+const (
+	ResumeFork  Resume = "fork"
+	ResumeFresh Resume = "fresh"
+)
 
 // Agenda numbers are <Prefix><n> with n >= First.
 type Agenda struct {
@@ -95,6 +114,148 @@ type Seat struct {
 
 // Has reports whether the seat holds right r.
 func (s Seat) Has(r Right) bool { return slices.Contains(s.Rights, r) }
+
+// SessionKind is the kind of a seat session.
+type SessionKind string
+
+const (
+	KindDraft SessionKind = "draft"
+	KindVote  SessionKind = "vote"
+)
+
+// Council plugin tools (plugin/index.ts).
+const (
+	ToolReadIssue = "pm_read_issue"
+	ToolProxyRead = "pm_proxy_read"
+	ToolDraft     = "pm_draft"
+	ToolBlock     = "pm_block"
+	ToolVote      = "pm_vote"
+)
+
+// PluginTools are the plugin tools registered in a session of kind k.
+func (k SessionKind) PluginTools() []string {
+	switch k {
+	case KindDraft:
+		return []string{ToolReadIssue, ToolProxyRead, ToolDraft, ToolBlock}
+	case KindVote:
+		return []string{ToolReadIssue, ToolProxyRead, ToolVote}
+	}
+	panic(fmt.Sprintf("unknown session kind %q", k))
+}
+
+// goalCapable are the plugin tools of kind k whose arguments the program acts on.
+func (k SessionKind) goalCapable() []string {
+	switch k {
+	case KindDraft:
+		return []string{ToolDraft, ToolBlock}
+	case KindVote:
+		return []string{ToolVote}
+	}
+	panic(fmt.Sprintf("unknown session kind %q", k))
+}
+
+// Goals holds each session kind's goal tools and prompts (council/goals.yaml).
+type Goals struct {
+	Draft Goal `yaml:"draft"`
+	Vote  Goal `yaml:"vote"`
+}
+
+// Of returns the goal of kind k.
+func (g Goals) Of(k SessionKind) Goal {
+	switch k {
+	case KindDraft:
+		return g.Draft
+	case KindVote:
+		return g.Vote
+	}
+	panic(fmt.Sprintf("unknown session kind %q", k))
+}
+
+// Goal is one session kind: any of GoalTools succeeding completes the session; Opening is the first
+// prompt of a new session, Resume the first prompt of a session forked from a killed one, Continue
+// the prompt sent while no goal tool has succeeded.
+type Goal struct {
+	GoalTools []string `yaml:"goalTools"`
+	Opening   string   `yaml:"opening"`
+	Continue  string   `yaml:"continue"`
+	Resume    string   `yaml:"resume"`
+
+	opening, resume *template.Template
+}
+
+// OpeningData is what the opening and resume templates see.
+type OpeningData struct {
+	Ref, Title, Body, Agenda string
+	Round, Version           int
+	// Draft is the draft marker JSON for vote sessions; empty for draft sessions.
+	Draft      string
+	Escalation *EscalationData
+}
+
+// EscalationData is the ask an agenda issue was raised from: its implementation issue, the ask
+// comment id and the ask comment's text.
+type EscalationData struct {
+	Issue   string
+	Ask     int64
+	AskText string
+}
+
+// RenderOpening executes the opening template.
+func (g Goal) RenderOpening(d OpeningData) (string, error) { return render(g.opening, d) }
+
+// RenderResume executes the resume template.
+func (g Goal) RenderResume(d OpeningData) (string, error) { return render(g.resume, d) }
+
+func render(t *template.Template, d OpeningData) (string, error) {
+	var b strings.Builder
+	if err := t.Execute(&b, d); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+// Content is a category of repositories a seat may have read by proxy.
+type Content string
+
+const (
+	ContentCode   Content = "code"
+	ContentDesign Content = "design"
+	ContentOMP    Content = "omp"
+)
+
+var contents = []Content{ContentCode, ContentDesign, ContentOMP}
+
+// ProxyReader is a seat's proxy-read mapping (council/proxy-readers.yaml).
+type ProxyReader struct {
+	Seat    string    `yaml:"seat" json:"seat"`
+	Default string    `yaml:"default" json:"default"`
+	Others  []string  `yaml:"others" json:"others"`
+	Content []Content `yaml:"content" json:"content"`
+	Note    string    `yaml:"note" json:"note"`
+}
+
+// ProxyReader returns the proxy-read mapping of seat id.
+func (c *Config) ProxyReader(seat string) (ProxyReader, bool) {
+	i := slices.IndexFunc(c.ProxyReaders, func(p ProxyReader) bool { return p.Seat == seat })
+	if i < 0 {
+		return ProxyReader{}, false
+	}
+	return c.ProxyReaders[i], true
+}
+
+// DraftSeat returns the one seat with the draft right.
+func (c *Config) DraftSeat() Seat {
+	return c.Seats[slices.IndexFunc(c.Seats, func(s Seat) bool { return s.Has(RightDraft) })]
+}
+
+// Seat returns the seat with id.
+func (c *Config) Seat(id string) (Seat, bool) {
+	i := slices.IndexFunc(c.Seats, func(s Seat) bool { return s.ID == id })
+	if i < 0 {
+		return Seat{}, false
+	}
+	return c.Seats[i], true
+}
 
 type Repos struct {
 	PM     PMRepo     `yaml:"pm"`
@@ -154,9 +315,9 @@ type KindOptions struct {
 }
 
 type ProposerOptions struct {
-	Human        string `yaml:"human"`
-	Guardians    string `yaml:"guardians"`
-	Coordination string `yaml:"coordination"`
+	Human       string `yaml:"human"`
+	Guardians   string `yaml:"guardians"`
+	CouncilSeat string `yaml:"coordination"` // proposed by a council seat
 }
 
 // Named is one semantic option key with its GitHub option name.
@@ -174,11 +335,15 @@ func (o KindOptions) List() []Named {
 
 // List returns the proposer options in a fixed order.
 func (o ProposerOptions) List() []Named {
-	return []Named{{"human", o.Human}, {"guardians", o.Guardians}, {"coordination", o.Coordination}}
+	return []Named{{"human", o.Human}, {"guardians", o.Guardians}, {"coordination", o.CouncilSeat}}
 }
 
 type seatsFile struct {
 	Seats []Seat `yaml:"seats"`
+}
+
+type proxyReadersFile struct {
+	Seats []ProxyReader `yaml:"seats"`
 }
 
 var (
@@ -193,6 +358,8 @@ func Load(root string) (*Config, error) {
 		rt  Runtime
 		cn  Council
 		sf  seatsFile
+		gl  Goals
+		pr  proxyReadersFile
 		rep Repos
 		prj Project
 	)
@@ -203,6 +370,8 @@ func Load(root string) (*Config, error) {
 		{"council/runtime.yaml", &rt},
 		{"council/council.yaml", &cn},
 		{"council/seats.yaml", &sf},
+		{"council/goals.yaml", &gl},
+		{"council/proxy-readers.yaml", &pr},
 		{"shared/repos.yaml", &rep},
 		{"shared/project.yaml", &prj},
 	} {
@@ -212,7 +381,7 @@ func Load(root string) (*Config, error) {
 	}
 
 	v := &validator{}
-	cfg := &Config{Runtime: rt, Council: cn, Seats: sf.Seats, Repos: rep, Project: prj}
+	cfg := &Config{Runtime: rt, Council: cn, Seats: sf.Seats, Goals: gl, ProxyReaders: pr.Seats, Repos: rep, Project: prj}
 	councilDir := filepath.Join(root, "council")
 	resolve := func(p string) string {
 		if p == "" || filepath.IsAbs(p) {
@@ -255,6 +424,13 @@ func Load(root string) (*Config, error) {
 		}
 		f.positive("agenda.first", a.First)
 		f.positive("maxConcurrentPanels", cfg.Council.MaxConcurrentPanels)
+		switch cfg.Council.Resume {
+		case ResumeFork, ResumeFresh:
+		case "":
+			f.missing("resume")
+		default:
+			f.errorf("resume", "%q is not one of fork, fresh", cfg.Council.Resume)
+		}
 	}
 
 	// seats.yaml
@@ -273,8 +449,13 @@ func Load(root string) (*Config, error) {
 				f.errorf(p+".id", "duplicate seat %q", s.ID)
 			}
 			ids[s.ID] = true
-			if f.str(p+".prompt", s.Prompt) && filepath.IsAbs(s.Prompt) {
-				f.errorf(p+".prompt", "%q must be relative to council/", s.Prompt)
+			if f.str(p+".prompt", s.Prompt) {
+				if filepath.IsAbs(s.Prompt) {
+					f.errorf(p+".prompt", "%q must be relative to council/", s.Prompt)
+				} else {
+					cfg.Seats[i].Prompt = resolve(s.Prompt)
+					f.exists(p+".prompt", cfg.Seats[i].Prompt)
+				}
 			}
 			f.nonEmpty(p+".tools", len(s.Tools))
 			for j, t := range s.Tools {
@@ -292,6 +473,94 @@ func Load(root string) (*Config, error) {
 					f.errorf(rp, "duplicate right %q", r)
 				}
 				seen[r] = true
+			}
+		}
+		drafters := 0
+		voters := 0
+		for _, s := range cfg.Seats {
+			if s.Has(RightDraft) {
+				drafters++
+			}
+			if s.Has(RightVote) {
+				voters++
+			}
+		}
+		if len(cfg.Seats) > 0 && drafters != 1 {
+			f.errorf("seats", "exactly one seat must have the draft right, %d have", drafters)
+		}
+		if len(cfg.Seats) > 0 && voters == 0 {
+			f.errorf("seats", "no seat has the vote right")
+		}
+	}
+
+	// goals.yaml
+	{
+		f := v.file("council/goals.yaml")
+		for _, k := range []SessionKind{KindDraft, KindVote} {
+			g := cfg.Goals.Of(k)
+			p := string(k)
+			f.nonEmpty(p+".goalTools", len(g.GoalTools))
+			seen := map[string]bool{}
+			for j, t := range g.GoalTools {
+				tp := fmt.Sprintf("%s.goalTools[%d]", p, j)
+				switch {
+				case !slices.Contains(k.goalCapable(), t):
+					f.errorf(tp, "%q is not a %s goal tool of the council plugin (%s)", t, k, strings.Join(k.goalCapable(), ", "))
+				case seen[t]:
+					f.errorf(tp, "duplicate goal tool %q", t)
+				}
+				seen[t] = true
+			}
+			f.str(p+".continue", g.Continue)
+			g.opening = f.template(p+".opening", g.Opening)
+			g.resume = f.template(p+".resume", g.Resume)
+			switch k {
+			case KindDraft:
+				cfg.Goals.Draft = g
+			case KindVote:
+				cfg.Goals.Vote = g
+			}
+		}
+	}
+
+	// proxy-readers.yaml
+	{
+		f := v.file("council/proxy-readers.yaml")
+		f.present("seats", cfg.ProxyReaders != nil)
+		seen := map[string]bool{}
+		for i, r := range cfg.ProxyReaders {
+			p := fmt.Sprintf("seats[%d]", i)
+			if f.str(p+".seat", r.Seat) {
+				switch _, ok := cfg.Seat(r.Seat); {
+				case !ok:
+					f.errorf(p+".seat", "%q is not a seat of council/seats.yaml", r.Seat)
+				case seen[r.Seat]:
+					f.errorf(p+".seat", "duplicate seat %q", r.Seat)
+				}
+				seen[r.Seat] = true
+			}
+			f.str(p+".default", r.Default)
+			f.present(p+".others", r.Others != nil)
+			for j, m := range r.Others {
+				f.str(fmt.Sprintf("%s.others[%d]", p, j), m)
+			}
+			f.nonEmpty(p+".content", len(r.Content))
+			kinds := map[Content]bool{}
+			for j, c := range r.Content {
+				cp := fmt.Sprintf("%s.content[%d]", p, j)
+				switch {
+				case !slices.Contains(contents, c):
+					f.errorf(cp, "%q is not one of code, design, omp", c)
+				case kinds[c]:
+					f.errorf(cp, "duplicate content %q", c)
+				}
+				kinds[c] = true
+			}
+			f.str(p+".note", r.Note)
+		}
+		for _, s := range cfg.Seats {
+			if (s.Has(RightDraft) || s.Has(RightVote)) && s.ID != "" && !seen[s.ID] {
+				f.errorf("seats", "seat %q drafts or votes and has no entry", s.ID)
 			}
 		}
 	}
@@ -389,6 +658,36 @@ func (f fileValidator) url(path, s string) {
 	if f.str(path, s) && !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
 		f.errorf(path, "%q is not an http(s) URL", s)
 	}
+}
+
+func (f fileValidator) exists(path, file string) {
+	if st, err := os.Stat(file); err != nil {
+		f.errorf(path, "%v", err)
+	} else if st.IsDir() {
+		f.errorf(path, "%s is a directory", file)
+	}
+}
+
+// template parses s as a text/template and executes it once without and once with an escalation,
+// so that a field the data does not have is a load error, not a panel failure.
+func (f fileValidator) template(path, s string) *template.Template {
+	if !f.str(path, s) {
+		return nil
+	}
+	t, err := template.New(path).Option("missingkey=error").Parse(s)
+	if err != nil {
+		f.errorf(path, "%v", err)
+		return nil
+	}
+	sample := OpeningData{Ref: "o/r#1", Title: "t", Body: "b", Agenda: "A1", Round: 1, Version: 1, Draft: "{}"}
+	for _, esc := range []*EscalationData{nil, {Issue: "o/c#1", Ask: 1, AskText: "a"}} {
+		sample.Escalation = esc
+		if _, err := render(t, sample); err != nil {
+			f.errorf(path, "%v", err)
+			return nil
+		}
+	}
+	return t
 }
 
 func (f fileValidator) selectField(path, name string, options []Named) {

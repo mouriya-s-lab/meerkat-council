@@ -1,0 +1,10 @@
+{
+	"name": "@oh-my-omp/pm-council-plugin",
+	"version": "0.1.0",
+	"private": true,
+	"description": "omp extension loaded by pm-council into every seat session: PM issue reads, proxy reads, draft/block/vote goal tools, pm-meta entry and goal holding",
+	"type": "module",
+	"omp": {
+		"extensions": ["./index.ts"]
+	}
+}
