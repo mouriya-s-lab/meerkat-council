@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/oh-my-omp/pm-council/internal/config"
 	"github.com/oh-my-omp/pm-council/internal/github"
@@ -33,7 +34,7 @@ import (
 type GitHub interface {
 	Issue(ctx context.Context, repo string, number int) (github.Issue, error)
 	Comment(ctx context.Context, repo string, id int64) (string, error)
-	Comments(ctx context.Context, repo string, number int) ([]string, error)
+	EachComment(ctx context.Context, repo string, number int, fn func(body string, createdAt time.Time) error) error
 	PostComment(ctx context.Context, repo string, number int, body string) (int64, error)
 	SetOption(ctx context.Context, projectID, itemID, fieldID, optionID string) error
 }
@@ -430,14 +431,19 @@ func (p *run) read(ctx context.Context) (issue, error) {
 			is.ask = &config.EscalationData{Issue: e.Issue, Ask: e.Ask, AskText: text}
 		}
 	}
-	bodies, err := p.gh.Comments(ctx, p.repo, p.number)
-	if err != nil {
+	// Streams page by page without retaining bodies; malformed markers are logged.
+	if err := p.gh.EachComment(ctx, p.repo, p.number, func(body string, _ time.Time) error {
+		m, err := markers.Parse(body)
+		switch {
+		case errors.Is(err, markers.ErrNoMarker):
+		case err != nil:
+			slog.Error("ignoring malformed marker", "issue", p.job.Ref, "err", err)
+		default:
+			is.markers = append(is.markers, m)
+		}
+		return nil
+	}); err != nil {
 		return issue{}, err
-	}
-	var errs []error
-	is.markers, errs = markers.Collect(bodies)
-	for _, err := range errs {
-		slog.Error("ignoring malformed marker", "issue", p.job.Ref, "err", err)
 	}
 	return is, nil
 }

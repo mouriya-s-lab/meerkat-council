@@ -88,15 +88,23 @@ func (f *fakeGitHub) Issue(_ context.Context, repo string, n int) (github.Issue,
 	return github.Issue{NodeID: "node-" + key(repo, n), Title: is.title, Body: is.body, Closed: is.closed}, nil
 }
 
-func (f *fakeGitHub) Comments(_ context.Context, repo string, n int) ([]string, error) {
+func (f *fakeGitHub) CommentMarkers(_ context.Context, repo string, n int, fn func(m markers.Marker) error) error {
 	if err := f.read(); err != nil {
-		return nil, err
+		return err
 	}
 	is, err := f.issue(repo, n)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return slices.Clone(is.comments), nil
+	for _, b := range is.comments {
+		// Malformed markers are skipped; only fn errors abort.
+		if m, err := markers.Parse(b); err == nil {
+			if err := fn(m); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (f *fakeGitHub) PostComment(_ context.Context, repo string, n int, body string) (int64, error) {

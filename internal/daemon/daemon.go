@@ -27,7 +27,10 @@ import (
 type GitHub interface {
 	ProjectItems(ctx context.Context, projectID string) ([]github.Item, error)
 	IssueItem(ctx context.Context, repo string, number int, projectID string) (github.Item, bool, error)
-	IssueComments(ctx context.Context, repo string, number int) ([]github.Comment, error)
+	// EachComment streams one issue's comments page by page, oldest first,
+	// without retaining the bodies. The daemon's read path uses it; fakes and
+	// wrappers implement it by ranging over their in-memory comments.
+	EachComment(ctx context.Context, repo string, number int, fn func(body string, createdAt time.Time) error) error
 	BlockedBy(ctx context.Context, repo string, number int) ([]github.IssueRef, error)
 	SetText(ctx context.Context, projectID, itemID, fieldID, text string) error
 	SetOption(ctx context.Context, projectID, itemID, fieldID, optionID string) error
@@ -275,7 +278,7 @@ func (d *Daemon) start(ctx context.Context, r record, start queue.Start, humans 
 
 // rebuild re-reads the Project and, from the issue's updatedAt, keeps every record whose issue's
 // comments and state have not changed on GitHub since the last read: the REST reads
-// (IssueComments, BlockedBy) run only for issues whose updatedAt moved or that the copy has not
+// (EachComment, BlockedBy) run only for issues whose updatedAt moved or that the copy has not
 // seen yet. The Project fields (Kind, Status, Agenda) and Closed always come from the fresh
 // ProjectItems: a field or close-state write does not move the issue's updatedAt.
 func (d *Daemon) rebuild(ctx context.Context) error {
@@ -366,13 +369,12 @@ func (d *Daemon) read(ctx context.Context, it github.Item) (record, error) {
 	if is.Kind == queue.KindNone {
 		slog.Info("issue has no Kind; not on the agenda", "issue", ref, "field", p.Kind.Name, "value", it.Fields[p.Kind.Name])
 	}
-	comments, err := d.gh.IssueComments(ctx, it.Repo, it.Number)
-	if err != nil {
-		return record{}, err
-	}
-	// The markers as markers.Collect gives them, and the time of the comment of the latest pm:panel.
-	for _, c := range comments {
-		m, err := markers.Parse(c.Body)
+	// The parsed markers, and the time of the comment of the latest pm:panel.
+	// EachComment decodes one page at a time and releases it before fetching the
+	// next; only the parsed markers and the PanelAt stamp are retained.
+	// No comment cache or index is kept.
+	err := d.gh.EachComment(ctx, it.Repo, it.Number, func(body string, createdAt time.Time) error {
+		m, err := markers.Parse(body)
 		switch {
 		case errors.Is(err, markers.ErrNoMarker):
 		case err != nil:
@@ -380,9 +382,13 @@ func (d *Daemon) read(ctx context.Context, it github.Item) (record, error) {
 		default:
 			is.Markers = append(is.Markers, m)
 			if m.Kind() == markers.KindPanel {
-				is.PanelAt = c.CreatedAt
+				is.PanelAt = createdAt
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return record{}, err
 	}
 	blockers, err := d.gh.BlockedBy(ctx, it.Repo, it.Number)
 	if err != nil {

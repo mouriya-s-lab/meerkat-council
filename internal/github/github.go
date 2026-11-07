@@ -19,6 +19,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/api"
 
 	"github.com/oh-my-omp/pm-council/internal/config"
+	"github.com/oh-my-omp/pm-council/internal/markers"
 )
 
 // Client talks to GitHub with one token.
@@ -300,26 +301,23 @@ type Comment struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// IssueComments returns the issue's comments, oldest first.
-func (c *Client) IssueComments(ctx context.Context, repo string, number int) ([]Comment, error) {
-	cs, err := pages[Comment](ctx, c.rest, fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", repo, number))
-	if err != nil {
-		return nil, fmt.Errorf("comments of %s#%d: %w", repo, number, err)
+// CommentMarkers calls fn for every council marker of the issue's comments,
+// oldest first, without retaining the comment bodies. Comments without a marker
+// and malformed markers are skipped. PanelAt collection stays with the caller: fn
+// sees only the marker, and the daemon is the one caller that needs the
+// comment's creation time.
+func (c *Client) CommentMarkers(ctx context.Context, repo string, number int, fn func(m markers.Marker) error) error {
+	if err := c.EachComment(ctx, repo, number, func(body string, _ time.Time) error {
+		m, err := markers.ParseLine(markers.LastLine(body))
+		if err != nil {
+			// No marker or a malformed one: skipped.
+			return nil
+		}
+		return fn(m)
+	}); err != nil {
+		return fmt.Errorf("markers of %s#%d: %w", repo, number, err)
 	}
-	return cs, nil
-}
-
-// Comments returns the bodies of the issue's comments, oldest first.
-func (c *Client) Comments(ctx context.Context, repo string, number int) ([]string, error) {
-	cs, err := c.IssueComments(ctx, repo, number)
-	if err != nil {
-		return nil, err
-	}
-	bodies := make([]string, len(cs))
-	for i, c := range cs {
-		bodies[i] = c.Body
-	}
-	return bodies, nil
+	return nil
 }
 
 // IssueRef names an issue by repository and number.
@@ -642,25 +640,63 @@ func (c *Client) CommitFiles(ctx context.Context, repo, branch, message string, 
 
 var nextLink = regexp.MustCompile(`<([^>]+)>;\s*rel="next"`)
 
-// pages GETs path and every following page named by the Link header.
-func pages[T any](ctx context.Context, rest *api.RESTClient, path string) ([]T, error) {
-	var all []T
+// eachPage GETs path and every following page named by the Link header, handing
+// each decoded page to fn before requesting the next one. The page slice is not
+// retained after fn returns, so callers that only derive small values per item
+// never hold all pages at once. pages, BlockedBy and SubIssues stay
+// collect-over-eachPage wrappers; comment-marker callers should prefer
+// EachComment, which also releases each comment body after fn returns.
+func eachPage[T any](ctx context.Context, rest *api.RESTClient, path string, fn func(page []T) error) error {
 	for path != "" {
 		resp, err := rest.RequestWithContext(ctx, http.MethodGet, path, nil)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		var page []T
 		err = json.NewDecoder(resp.Body).Decode(&page)
 		resp.Body.Close()
 		if err != nil {
-			return nil, err
+			return err
 		}
-		all = append(all, page...)
+		if err := fn(page); err != nil {
+			return err
+		}
 		path = ""
 		if m := nextLink.FindStringSubmatch(resp.Header.Get("Link")); m != nil {
 			path = m[1]
 		}
 	}
+	return nil
+}
+
+// pages GETs path and every following page named by the Link header.
+func pages[T any](ctx context.Context, rest *api.RESTClient, path string) ([]T, error) {
+	var all []T
+	if err := eachPage(ctx, rest, path, func(page []T) error {
+		all = append(all, page...)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	return all, nil
+}
+
+// EachComment calls fn for every comment of the issue, oldest first, decoding
+// one page at a time and releasing it before requesting the next. fn must not
+// retain the body (or any substring of it): the page holding it is dropped
+// once the page is fully visited. Returning an error aborts the walk.
+func (c *Client) EachComment(ctx context.Context, repo string, number int, fn func(body string, createdAt time.Time) error) error {
+	err := eachPage[Comment](ctx, c.rest, fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", repo, number), func(page []Comment) error {
+		for i := range page {
+			if err := fn(page[i].Body, page[i].CreatedAt); err != nil {
+				return err
+			}
+			page[i].Body = ""
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("comments of %s#%d: %w", repo, number, err)
+	}
+	return nil
 }

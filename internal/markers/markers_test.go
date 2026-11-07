@@ -76,3 +76,30 @@ func TestParseHandWritten(t *testing.T) {
 		t.Fatalf("got %#v", m)
 	}
 }
+
+func TestParseLineMatchesParse(t *testing.T) {
+	bodies := []string{
+		"hello\n\n<!-- pm:superseded {\"v\":1,\"by\":\"o/pm#9\"} -->\n",
+		"pad\r\n<!-- pm:panel {\"v\":1,\"event\":\"started\",\"round\":1,\"sessions\":[],\"prereq\":null,\"error\":null} -->  \t\r\n",
+		"a\nb\n<!-- pm:vote {\"v\":1,\"seat\":\"A\",\"version\":1,\"rows\":[{\"row\":\"D1-01\",\"choice\":\"approve\",\"counterexample\":null,\"citation\":null,\"classification\":null}]} -->",
+		"plain comment",
+		"",
+		"<!-- pm:panel {\"v\":1} -->\nmarker not on the last line",
+	}
+	for _, body := range bodies {
+		want, wantErr := Parse(body)
+		got, gotErr := ParseLine(LastLine(body))
+		if (wantErr == nil) != (gotErr == nil) {
+			t.Fatalf("body %q: Parse err %v, ParseLine err %v", body, wantErr, gotErr)
+		}
+		if wantErr != nil {
+			if wantErr.Error() != gotErr.Error() && !errors.Is(wantErr, ErrNoMarker) {
+				t.Fatalf("body %q: Parse err %q, ParseLine err %q", body, wantErr, gotErr)
+			}
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("body %q:\n got %#v\nwant %#v", body, got, want)
+		}
+	}
+}

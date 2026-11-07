@@ -52,11 +52,16 @@ func (f *fakeGitHub) IssueItem(_ context.Context, repo string, n int, _ string) 
 	return github.Item{}, false, nil
 }
 
-func (f *fakeGitHub) IssueComments(_ context.Context, _ string, n int) ([]github.Comment, error) {
+func (f *fakeGitHub) EachComment(_ context.Context, _ string, n int, fn func(string, time.Time) error) error {
 	if f.commentsCalls != nil {
 		f.commentsCalls[n]++
 	}
-	return f.comments[n], nil
+	for _, c := range f.comments[n] {
+		if err := fn(c.Body, c.CreatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (f *fakeGitHub) BlockedBy(_ context.Context, _ string, n int) ([]github.IssueRef, error) {

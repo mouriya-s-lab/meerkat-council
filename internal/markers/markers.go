@@ -262,13 +262,19 @@ var linePattern = regexp.MustCompile(`^<!-- pm:([a-z]+) (\{.*\}) -->$`)
 // ErrNoMarker means the body's last line is not a pm marker line.
 var ErrNoMarker = errors.New("no pm marker")
 
-// Parse returns the marker on the last non-blank line of body. It returns ErrNoMarker when that
-// line is not `<!-- pm:<kind> <JSON> -->`, and another error when it is one but does not parse
-// into a council marker of that kind.
-func Parse(body string) (Marker, error) {
+// LastLine returns the last non-blank line of body: Parse only reads this line,
+// so streaming callers can parse it and release the full body at once.
+func LastLine(body string) string {
 	body = strings.TrimRight(body, " \t\r\n")
 	line := body[strings.LastIndexByte(body, '\n')+1:]
-	m := linePattern.FindStringSubmatch(strings.TrimSpace(line))
+	return strings.TrimSpace(line)
+}
+
+// ParseLine parses one marker line as produced by Format (or by LastLine). It is
+// the single parser behind Parse: Parse extracts the body's last non-blank line
+// and feeds it here, so there is exactly one marker grammar, not two.
+func ParseLine(line string) (Marker, error) {
+	m := linePattern.FindStringSubmatch(line)
 	if m == nil {
 		return nil, ErrNoMarker
 	}
@@ -303,6 +309,13 @@ func Parse(body string) (Marker, error) {
 	}
 	// Return the value, not the pointer, so callers switch on value types.
 	return reflect.ValueOf(mk).Elem().Interface().(Marker), nil
+}
+
+// Parse returns the marker on the last non-blank line of body. It returns ErrNoMarker when that
+// line is not `<!-- pm:<kind> <JSON> -->`, and another error when it is one but does not parse
+// into a council marker of that kind.
+func Parse(body string) (Marker, error) {
+	return ParseLine(LastLine(body))
 }
 
 func decode(raw []byte, dst Marker) error {
@@ -409,24 +422,6 @@ func Comment(text string, m Marker) (string, error) {
 		return "", err
 	}
 	return strings.TrimRight(text, "\n") + "\n\n" + line, nil
-}
-
-// Collect parses the marker of each body, oldest first. Bodies without a marker are skipped;
-// malformed markers are skipped and returned as errors.
-func Collect(bodies []string) ([]Marker, []error) {
-	var ms []Marker
-	var errs []error
-	for _, b := range bodies {
-		m, err := Parse(b)
-		switch {
-		case errors.Is(err, ErrNoMarker):
-		case err != nil:
-			errs = append(errs, err)
-		default:
-			ms = append(ms, m)
-		}
-	}
-	return ms, errs
 }
 
 // LastPanel returns the latest pm:panel marker of ms.
