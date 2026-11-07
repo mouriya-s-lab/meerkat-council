@@ -1,6 +1,6 @@
 // Package daemon keeps an in-memory copy of the PM repository's agenda issues, rebuilt from
 // GitHub at startup, on every forwarded issue event (that one issue) and every rebuild interval
-// (everything). It admits new agenda issues (Agenda number, Status=Todo), publishes the queue and
+// (everything). It admits new agenda issues (Agenda number; Status=Todo when unset), publishes the queue and
 // starts, interrupts and resumes panels. GitHub is the only source of issue state; the copy is
 // always replaceable by a rebuild. The live panels are processes of this daemon, not a copy.
 package daemon
@@ -372,7 +372,8 @@ func (d *Daemon) admitAndPublish(ctx context.Context) {
 }
 
 // admit gives each human or agenda issue without an Agenda number the next number of the
-// configured prefix (at least agenda.first), in issue-number order, and sets Status=Todo.
+// configured prefix (at least agenda.first), in issue-number order. It sets Status=Todo only on
+// an issue without a Status; a Status already set (by a human or another writer) is kept.
 func (d *Daemon) admit(ctx context.Context) error {
 	a := d.cfg.Council.Agenda
 	next := a.First
@@ -390,20 +391,22 @@ func (d *Daemon) admit(ctx context.Context) error {
 	for _, n := range pending {
 		r := d.records[n]
 		agenda := fmt.Sprintf("%s%d", a.Prefix, next)
-		// Status first: an admission cut short before the Agenda write is retried whole, since
-		// only issues without an Agenda number are admitted.
-		if err := d.gh.SetOption(ctx, d.project.ID, r.itemID, d.project.Status.ID, d.project.Status.Options[todoName]); err != nil {
-			return fmt.Errorf("admit %s: set %s: %w", r.issue.Ref, todoName, err)
+		if r.issue.Status == queue.StatusNone && r.issue.StatusName == "" {
+			// Status first: an admission cut short before the Agenda write is retried whole, since
+			// only issues without an Agenda number are admitted.
+			if err := d.gh.SetOption(ctx, d.project.ID, r.itemID, d.project.Status.ID, d.project.Status.Options[todoName]); err != nil {
+				return fmt.Errorf("admit %s: set %s: %w", r.issue.Ref, todoName, err)
+			}
+			r.issue.Status, r.issue.StatusName = queue.StatusTodo, todoName
+			d.records[n] = r
 		}
-		r.issue.Status, r.issue.StatusName = queue.StatusTodo, todoName
-		d.records[n] = r
 		if err := d.gh.SetText(ctx, d.project.ID, r.itemID, d.project.Agenda, agenda); err != nil {
 			return fmt.Errorf("admit %s: set %s: %w", r.issue.Ref, agenda, err)
 		}
 		r.issue.Agenda = agenda
 		d.records[n] = r
 		next++
-		slog.Info("admitted", "issue", r.issue.Ref, "agenda", agenda, "status", todoName)
+		slog.Info("admitted", "issue", r.issue.Ref, "agenda", agenda, "status", r.issue.StatusName)
 	}
 	return nil
 }
