@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/oh-my-omp/pm-council/internal/config"
+	"github.com/oh-my-omp/pm-council/internal/github"
 	"github.com/oh-my-omp/pm-council/internal/markers"
 	"github.com/oh-my-omp/pm-council/internal/queue"
 	"github.com/oh-my-omp/pm-council/internal/sessions"
@@ -181,5 +183,98 @@ func TestNormalizeDeliver(t *testing.T) {
 		if (rows[0].Deliver != nil) != tc.wantDeliver {
 			t.Errorf("%s: deliver = %+v, want non-nil %t", tc.name, rows[0].Deliver, tc.wantDeliver)
 		}
+	}
+}
+
+// draftGitHub is an issue with fixed comments that records the comments a panel posts.
+type draftGitHub struct {
+	comments []string
+	posted   []string
+}
+
+func (g *draftGitHub) Issue(context.Context, string, int) (github.Issue, error) {
+	return github.Issue{Title: "t"}, nil
+}
+func (g *draftGitHub) Comment(context.Context, string, int64) (string, error) { return "", nil }
+func (g *draftGitHub) EachComment(_ context.Context, _ string, _ int, fn func(string, time.Time) error) error {
+	for _, c := range g.comments {
+		if err := fn(c, time.Time{}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (g *draftGitHub) PostComment(_ context.Context, _ string, _ int, body string) (int64, error) {
+	g.posted = append(g.posted, body)
+	return int64(len(g.posted)), nil
+}
+func (g *draftGitHub) SetOption(context.Context, string, string, string, string) error { return nil }
+
+// TestPostDraftOmittedNullables: pm_draft may omit settle and withdrawn (issue #43); the posted
+// pm:draft is the same as with explicit nulls, and a draft session's withdrawal is refused with
+// the plugin's wording.
+func TestPostDraftOmittedNullables(t *testing.T) {
+	const row = `{"id":"S1-01","what":"w","where":"x","how":"h","tradeoff":"t","category":"意图","missingDesign":false}`
+	post := func(t *testing.T, comments []string, st Step, args string) (*draftGitHub, error) {
+		t.Helper()
+		gh := &draftGitHub{comments: comments}
+		p := &run{Runner: &Runner{gh: gh}, job: Job{Ref: queue.Ref("o/pm#7")}, repo: "o/pm", number: 7}
+		err := p.postDraft(context.Background(), st, sessions.Result{SessionID: "s1", ToolName: config.ToolDraft, Args: json.RawMessage(args)})
+		return gh, err
+	}
+	first := Step{Kind: StepDraft, Round: 1}
+
+	nulls, err := post(t, nil, first, `{"rows":[`+row+`],"supersedes":[],"settle":null,"withdrawn":null}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	omitted, err := post(t, nil, first, `{"rows":[`+row+`],"supersedes":[]}`)
+	if err != nil {
+		t.Fatalf("draft without settle and withdrawn: %v", err)
+	}
+	if len(omitted.posted) != 1 || len(nulls.posted) != 1 {
+		t.Fatalf("posted %d and %d drafts, want 1 each", len(omitted.posted), len(nulls.posted))
+	}
+	if omitted.posted[0] != nulls.posted[0] {
+		t.Errorf("omitted keys posted\n%s\nexplicit nulls posted\n%s", omitted.posted[0], nulls.posted[0])
+	}
+	for _, want := range []string{`"settle":null`, `"withdrawn":null`, `"deliver":null`} {
+		if !strings.Contains(omitted.posted[0], want) {
+			t.Errorf("pm:draft %q lacks %s", omitted.posted[0], want)
+		}
+	}
+	m, err := markers.Parse(omitted.posted[0])
+	if err != nil {
+		t.Fatalf("pm:draft does not parse back: %v", err)
+	}
+	if d, ok := m.(markers.Draft); !ok || d.Version != 1 || d.Settle != nil || d.Withdrawn != nil {
+		t.Errorf("pm:draft = %#v", m)
+	}
+
+	gh, err := post(t, nil, first, `{"rows":[`+row+`],"supersedes":[],"withdrawn":"撤回"}`)
+	if err == nil || !strings.Contains(err.Error(), "withdrawn must be null: only a revise session may withdraw the agenda") {
+		t.Errorf("draft session withdrawing: err = %v", err)
+	}
+	if len(gh.posted) != 0 {
+		t.Errorf("a refused withdrawal posted %q", gh.posted)
+	}
+
+	// A revise session that omits withdrawn posts the next version, not withdrawn.
+	d1 := markers.Draft{Version: 1, Rows: []markers.Row{{ID: "S1-01", What: "w", Where: "x", How: "h", Tradeoff: "t", Category: "意图"}}, Supersedes: []string{}}
+	c1, err := markers.Comment("v1", d1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh, err = post(t, []string{c1}, Step{Kind: StepDraft, Round: 2, Version: 1, Draft: &d1}, `{"rows":[`+row+`],"supersedes":[]}`)
+	if err != nil {
+		t.Fatalf("revise without withdrawn: %v", err)
+	}
+	if len(gh.posted) != 1 {
+		t.Fatalf("revise posted %d drafts, want 1", len(gh.posted))
+	}
+	if m, err := markers.Parse(gh.posted[0]); err != nil {
+		t.Fatal(err)
+	} else if d, ok := m.(markers.Draft); !ok || d.Version != 2 || d.Withdrawn != nil {
+		t.Errorf("revised pm:draft = %#v", m)
 	}
 }

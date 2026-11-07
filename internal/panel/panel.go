@@ -522,8 +522,9 @@ func (p *run) postDraft(ctx context.Context, st Step, res sessions.Result) error
 	if a.Supersedes == nil {
 		a.Supersedes = []string{}
 	}
+	// An omitted withdrawn or settle decodes as nil, the same as null: no withdrawal, no settle.
 	if a.Withdrawn != nil && st.Draft == nil {
-		return fmt.Errorf("session %s withdrew the first draft; only a revise session may withdraw", res.SessionID)
+		return fmt.Errorf("session %s: withdrawn must be null: only a revise session may withdraw the agenda", res.SessionID)
 	}
 	// pm_draft's schema makes deliver optional; an omitted deliver is no delivery, and the marker
 	// shape (contract §A) is a deliver object or "deliver":null — a nil Row across json.Marshal
