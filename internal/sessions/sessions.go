@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,8 +33,9 @@ type Meta struct {
 	Version int                `json:"version"`
 }
 
-// File is what the program derives from one omp session file. Entries timestamped before the
-// session header (history copied by a fork) count only for Meta.
+// File is what the program derives from one omp session file and the failure record the program
+// keeps beside it. Entries timestamped before the session header (history copied by a fork) count
+// only for Meta.
 type File struct {
 	Path          string
 	ID            string
@@ -42,6 +45,35 @@ type File struct {
 	Meta          *Meta                // latest pm-meta entry
 	ToolOK        map[string]time.Time // tool name -> timestamp of its latest successful tool result
 	LastError     string               // errorMessage of the latest assistant message that failed
+	Failure       string               // why the program's run of this session failed; see FailurePath
+	FailedAt      time.Time            // when the program decided it failed; zero for records without it
+}
+
+// failureRecord is the file at FailurePath. Records written before At existed lack it.
+type failureRecord struct {
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at,omitzero"` // RFC 3339
+}
+
+// FailurePath is where the program records why and when its run of the session in the omp session
+// file path failed (omp exited, a non-retryable error, the continue limit, the session timeout). omp
+// writes the session file and stops writing it when killed; the program owns this record, so the
+// reason and the end time outlive the process.
+func FailurePath(sessionFile string) string {
+	return strings.TrimSuffix(sessionFile, ".jsonl") + ".pm-failure.json"
+}
+
+// writeFailure records that the session in sessionFile failed at at for reason, atomically.
+func writeFailure(sessionFile, reason string, at time.Time) error {
+	b, err := json.Marshal(failureRecord{Reason: reason, At: at})
+	if err != nil {
+		return err
+	}
+	path := FailurePath(sessionFile)
+	if err := os.WriteFile(path+".tmp", b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(path+".tmp", path)
 }
 
 // ErrNotSession marks a .jsonl file that is not an omp session file (no session header).
@@ -124,6 +156,17 @@ func ParseFile(path string) (*File, error) {
 	if f.ID == "" {
 		return nil, ErrNotSession
 	}
+	switch b, err := os.ReadFile(FailurePath(path)); {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return nil, err
+	default:
+		var rec failureRecord
+		if err := json.Unmarshal(b, &rec); err != nil {
+			return nil, fmt.Errorf("%s: %w", FailurePath(path), err)
+		}
+		f.Failure, f.FailedAt = rec.Reason, rec.At
+	}
 	return f, nil
 }
 
@@ -181,20 +224,19 @@ type Failure struct{ Reason string }
 
 func (f *Failure) Error() string { return f.Reason }
 
-// Registry runs sessions and remembers, for this process lifetime, which are live and why failed
-// ones failed. Everything else about a session comes from its file.
+// Registry runs sessions and tracks, for this process lifetime, which are live. Why a failed
+// session failed is kept beside its session file; everything else about a session comes from it.
 type Registry struct {
-	mu       sync.Mutex
-	live     map[string]bool
-	failures map[string]string
+	mu   sync.Mutex
+	live map[string]bool
 }
 
 func NewRegistry() *Registry {
-	return &Registry{live: map[string]bool{}, failures: map[string]string{}}
+	return &Registry{live: map[string]bool{}}
 }
 
 // Run starts omp per s through omprpc.RunSession and records, while it runs, that the session is
-// live and, if it fails, why.
+// live; if it fails after its file is known, the failure goes into the record beside that file.
 func (r *Registry) Run(ctx context.Context, s Spec) (Result, error) {
 	if err := os.MkdirAll(s.SessionDir, 0o755); err != nil {
 		return Result{}, &Failure{Reason: err.Error()}
@@ -215,7 +257,7 @@ func (r *Registry) Run(ctx context.Context, s Spec) (Result, error) {
 	if s.ForkFrom != "" {
 		args = append(args, "--fork", s.ForkFrom)
 	}
-	var sessionID string
+	var sessionID, sessionFile string
 	res, err := omprpc.RunSession(ctx, omprpc.SessionSpec{
 		Options: omprpc.Options{
 			Bin:  s.OMP.Executable,
@@ -238,7 +280,7 @@ func (r *Registry) Run(ctx context.Context, s Spec) (Result, error) {
 		ReadyTimeout:       s.OMP.ReadyTimeout(),
 		ExitGrace:          s.OMP.ExitGrace(),
 		OnReady: func(id, file string) {
-			sessionID = id
+			sessionID, sessionFile = id, file
 			r.mu.Lock()
 			r.live[id] = true
 			r.mu.Unlock()
@@ -247,15 +289,17 @@ func (r *Registry) Run(ctx context.Context, s Spec) (Result, error) {
 			}
 		},
 	})
+	if err != nil && sessionFile != "" {
+		if werr := writeFailure(sessionFile, err.Error(), time.Now().UTC()); werr != nil {
+			slog.Error("record session failure", "session", sessionID, "err", werr)
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if sessionID != "" {
 		delete(r.live, sessionID)
 	}
 	if err != nil {
-		if sessionID != "" {
-			r.failures[sessionID] = err.Error()
-		}
 		return Result{}, &Failure{Reason: err.Error()}
 	}
 	return Result{SessionID: res.SessionID, SessionFile: res.SessionFile, ToolName: res.ToolName, Args: res.Args}, nil
@@ -329,18 +373,20 @@ func (r *Registry) List(dir string, goals config.Goals, limit int) ([]Summary, e
 			s.State = StateDone
 		default:
 			s.State = StateFailed
-			reason, ok := r.failures[f.ID]
+			reason := "ended without a goal tool"
 			switch {
-			case ok:
+			case f.Failure != "":
+				reason = f.Failure
 			case f.LastError != "":
 				reason = f.LastError
-			default:
-				reason = "ended without a goal tool"
 			}
 			s.Error = &reason
 		}
 		if s.State != StateRunning {
 			s.EndedAt = new(f.LastAt)
+			if s.State == StateFailed && !f.FailedAt.IsZero() {
+				s.EndedAt = new(f.FailedAt)
+			}
 		}
 		out = append(out, s)
 	}

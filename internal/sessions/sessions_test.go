@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/oh-my-omp/pm-council/internal/config"
 )
@@ -47,9 +48,12 @@ func TestList(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	failedAt := time.Date(2026, 11, 6, 22, 0, 5, 5e6, time.UTC)
+	if err := writeFailure(filepath.Join(dir, "2", "failed.jsonl"), "omp exited", failedAt); err != nil {
+		t.Fatal(err)
+	}
 	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"pm_draft"}}, Vote: config.Goal{GoalTools: []string{"pm_vote"}}}
 	reg := NewRegistry()
-	reg.failures["s-failed"] = "omp exited"
 
 	list, err := reg.List(dir, goals, 10)
 	if err != nil {
@@ -73,8 +77,10 @@ func TestList(t *testing.T) {
 		t.Errorf("done = %+v", d)
 	}
 
-	// The registry's reason wins over the file; without it the last failed assistant message.
-	delete(reg.failures, "s-failed")
+	// Without the record the reason falls back to the last failed assistant message.
+	if err := os.Remove(FailurePath(filepath.Join(dir, "2", "failed.jsonl"))); err != nil {
+		t.Fatal(err)
+	}
 	reg.live["s-fork"] = true
 	list, _ = reg.List(dir, goals, 10)
 	if list[0].State != StateRunning || list[0].EndedAt != nil || list[0].Error != nil {
@@ -91,5 +97,45 @@ func TestList(t *testing.T) {
 	}
 	if p, ok, err := FindFile(dir, "s-done"); err != nil || !ok || filepath.Base(p) != "done.jsonl" {
 		t.Errorf("FindFile = %q %v %v", p, ok, err)
+	}
+}
+
+// A failure record beside the session file outlives the process: a fresh Registry still reports the
+// reason and end time the failed run recorded, and a done session ends at its last entry.
+func TestListDerivesState(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{"1/done.jsonl": done, "2/failed.jsonl": failed} {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failedFile := filepath.Join(dir, "2", "failed.jsonl")
+	failedAt := time.Date(2026, 11, 6, 22, 0, 5, 5e6, time.UTC)
+	if err := writeFailure(failedFile, "omp exited", failedAt); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(FailurePath(failedFile)); err != nil || string(b) != `{"reason":"omp exited","at":"2026-11-06T22:00:05.005Z"}` {
+		t.Fatalf("failure record = %s, %v", b, err)
+	}
+	goals := config.Goals{Vote: config.Goal{GoalTools: []string{"pm_vote"}}}
+	list, err := NewRegistry().List(dir, goals, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("list = %+v", list)
+	}
+	f, d := list[0], list[1] // newest first
+	if f.ID != "s-failed" || f.State != StateFailed || f.Error == nil || *f.Error != "omp exited" ||
+		f.EndedAt == nil || !f.EndedAt.Equal(failedAt) {
+		t.Errorf("failed = %+v", f)
+	}
+	doneAt := time.Date(2026, 11, 6, 21, 30, 17, 0, time.UTC)
+	if d.ID != "s-done" || d.State != StateDone || d.EndedAt == nil || !d.EndedAt.Equal(doneAt) {
+		t.Errorf("done = %+v", d)
 	}
 }
