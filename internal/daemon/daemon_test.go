@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -33,6 +34,9 @@ type fakeGitHub struct {
 	comments map[int][]github.Comment
 	blockers map[int][]github.IssueRef
 	writes   []write
+	// call counts of the REST reads a rebuild may reuse its way past.
+	commentsCalls map[int]int
+	blockedCalls  map[int]int
 }
 
 func (f *fakeGitHub) ProjectItems(context.Context, string) ([]github.Item, error) {
@@ -49,10 +53,16 @@ func (f *fakeGitHub) IssueItem(_ context.Context, repo string, n int, _ string) 
 }
 
 func (f *fakeGitHub) IssueComments(_ context.Context, _ string, n int) ([]github.Comment, error) {
+	if f.commentsCalls != nil {
+		f.commentsCalls[n]++
+	}
 	return f.comments[n], nil
 }
 
 func (f *fakeGitHub) BlockedBy(_ context.Context, _ string, n int) ([]github.IssueRef, error) {
+	if f.blockedCalls != nil {
+		f.blockedCalls[n]++
+	}
 	return f.blockers[n], nil
 }
 
@@ -419,4 +429,128 @@ func TestScheduleKeepsThePanelPublishingItsDecision(t *testing.T) {
 		t.Fatalf("the publishing panel ended: %v", cause)
 	default:
 	}
+}
+
+// An issue whose updatedAt did not move since the last copy is not re-read: its record is kept
+// with Kind/Status/Agenda and Closed taken from the fresh ProjectItems values (those writes do
+// not move updatedAt). A moved updatedAt or an issue the copy has not seen is read again.
+func TestRebuildReusesUnchangedIssues(t *testing.T) {
+	t1 := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	item := func(n int, updatedAt time.Time) github.Item {
+		return github.Item{
+			ID: fmt.Sprintf("i%d", n), Repo: "o/pm", Number: n,
+			UpdatedAt: updatedAt,
+			Fields:    map[string]string{"Kind": "Agenda", "Agenda": fmt.Sprintf("D%d", n), "Status": "Todo"},
+		}
+	}
+	gh := &fakeGitHub{
+		items:         []github.Item{item(1, t1), item(2, t1)},
+		comments:      map[int][]github.Comment{},
+		blockers:      map[int][]github.IssueRef{},
+		commentsCalls: map[int]int{},
+		blockedCalls:  map[int]int{},
+	}
+	d, err := New(context.Background(), testConfig(), gh, project, &fakePanels{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh.commentsCalls = map[int]int{}
+	gh.blockedCalls = map[int]int{}
+
+	// case 1: no change since the last copy: no REST call at all.
+	gh.items[0].Fields["Status"] = "Done" // a Project field write does not move updatedAt
+	if err := d.rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(gh.commentsCalls) != 0 || len(gh.blockedCalls) != 0 {
+		t.Fatalf("rebuild made REST calls: comments %v blocked %v", gh.commentsCalls, gh.blockedCalls)
+	}
+	r := d.records[1]
+	if r.issue.Status != queue.StatusDone || !r.updatedAt.Equal(t1) || r.itemID != "i1" {
+		t.Fatalf("reused record not patched from the fresh item: %+v", r)
+	}
+
+	// case 2: updatedAt moved: the issue is read again.
+	gh.items[1].UpdatedAt = t1.Add(time.Minute)
+	gh.comments[2] = []github.Comment{{Body: "hello", CreatedAt: t1}}
+	resetCalls(gh)
+	if err := d.rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gh.commentsCalls[2] != 1 || gh.blockedCalls[2] != 1 {
+		t.Fatalf("reread of changed issue wrong: comments %v blocked %v", gh.commentsCalls, gh.blockedCalls)
+	}
+	if gh.commentsCalls[1] != 0 || gh.blockedCalls[1] != 0 {
+		t.Fatalf("unchanged issue was reread: comments %v blocked %v", gh.commentsCalls, gh.blockedCalls)
+	}
+	if len(d.records[2].issue.Markers) != 0 { // hello is not a marker
+		t.Fatalf("unexpected markers: %v", d.records[2].issue.Markers)
+	}
+
+	// case 3: a comment marker arrives: the reread record carries it.
+	panelMarker, err := markers.Comment("", markers.Panel{Event: markers.PanelStarted, Round: 1, Sessions: []markers.PanelSession{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh.items[1].UpdatedAt = t1.Add(2 * time.Minute)
+	gh.comments[2] = []github.Comment{{Body: panelMarker, CreatedAt: t1.Add(time.Minute)}}
+	if err := d.rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.records[2].issue.Markers) != 1 {
+		t.Fatalf("marker lost: %v", d.records[2].issue.Markers)
+	}
+}
+
+// Startup rebuild (New), refresh and refreshDecided read every issue they touch, whatever the
+// updatedAt: the startup has no copy; a panel has just changed the issue on GitHub.
+func TestFullReadsAreNotIncremental(t *testing.T) {
+	t1 := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	it := func(n int) github.Item {
+		return github.Item{
+			ID:        fmt.Sprintf("i%d", n),
+			Repo:      "o/pm",
+			Number:    n,
+			UpdatedAt: t1,
+			Fields:    map[string]string{"Kind": "Agenda", "Agenda": fmt.Sprintf("D%d", n), "Status": "In Progress"},
+		}
+	}
+	gh := &fakeGitHub{
+		items:         []github.Item{it(1), it(2), it(3)},
+		comments:      map[int][]github.Comment{},
+		blockers:      map[int][]github.IssueRef{},
+		commentsCalls: map[int]int{},
+		blockedCalls:  map[int]int{},
+	}
+	d, err := New(context.Background(), testConfig(), gh, project, &fakePanels{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gh.commentsCalls[1] != 1 || gh.commentsCalls[2] != 1 || gh.commentsCalls[3] != 1 ||
+		gh.blockedCalls[1] != 1 || gh.blockedCalls[2] != 1 || gh.blockedCalls[3] != 1 {
+		t.Fatalf("startup rebuild was not a full read: comments %v blocked %v", gh.commentsCalls, gh.blockedCalls)
+	}
+	resetCalls(gh)
+
+	// A single-issue refresh of an issue whose updatedAt is unchanged still reads it fully.
+	if err := d.refresh(context.Background(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if gh.commentsCalls[2] != 1 || gh.blockedCalls[2] != 1 {
+		t.Fatalf("refresh did not read the issue: comments %v blocked %v", gh.commentsCalls, gh.blockedCalls)
+	}
+	resetCalls(gh)
+
+	// refreshDecided reads the issue its panel ended on.
+	if err := d.refreshDecided(context.Background(), 3); err != nil {
+		t.Fatal(err)
+	}
+	if gh.commentsCalls[3] != 1 || gh.blockedCalls[3] != 1 {
+		t.Fatalf("refreshDecided did not read the issue: comments %v blocked %v", gh.commentsCalls, gh.blockedCalls)
+	}
+}
+
+func resetCalls(gh *fakeGitHub) {
+	gh.commentsCalls = map[int]int{}
+	gh.blockedCalls = map[int]int{}
 }

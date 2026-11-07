@@ -150,14 +150,18 @@ func (c *Client) ResolveProject(ctx context.Context, ref config.ProjectRef, p co
 	return out, nil
 }
 
-// Item is one Project item that is an issue: the item id, the issue, whether it is closed and its
-// field values by GitHub field name (single-select option name or text).
+// Item is one Project item that is an issue: the item id, the issue, whether it is closed, when the
+// issue last changed on GitHub and its field values by GitHub field name (single-select option name
+// or text).
 type Item struct {
 	ID     string
 	Repo   string
 	Number int
 	Closed bool
-	Fields map[string]string
+	// UpdatedAt is the issue's updatedAt as read together with the fields; it names when the
+	// issue's own comments and state last changed, not when a Project field did.
+	UpdatedAt time.Time
+	Fields    map[string]string
 }
 
 const fieldValuesSelection = `fieldValues(first:20){nodes{
@@ -191,7 +195,7 @@ func (fv fieldValues) toMap() map[string]string {
 // ProjectItems lists every Project item whose content is an issue.
 func (c *Client) ProjectItems(ctx context.Context, projectID string) ([]Item, error) {
 	const q = `query($id:ID!,$c:String){node(id:$id){... on ProjectV2{items(first:100,after:$c){
-  nodes{id content{... on Issue{number closed repository{nameWithOwner}}} ` + fieldValuesSelection + `}
+  nodes{id content{... on Issue{number closed updatedAt repository{nameWithOwner}}} ` + fieldValuesSelection + `}
   pageInfo{hasNextPage endCursor}}}}}`
 	var items []Item
 	var cursor *string
@@ -202,8 +206,9 @@ func (c *Client) ProjectItems(ctx context.Context, projectID string) ([]Item, er
 					Nodes []struct {
 						ID      string `json:"id"`
 						Content *struct {
-							Number     int  `json:"number"`
-							Closed     bool `json:"closed"`
+							Number     int    `json:"number"`
+							Closed     bool   `json:"closed"`
+							UpdatedAt  string `json:"updatedAt"`
 							Repository struct {
 								NameWithOwner string `json:"nameWithOwner"`
 							} `json:"repository"`
@@ -224,7 +229,7 @@ func (c *Client) ProjectItems(ctx context.Context, projectID string) ([]Item, er
 			if n.Content == nil || n.Content.Number == 0 {
 				continue // draft issue, pull request or redacted content
 			}
-			items = append(items, Item{ID: n.ID, Repo: n.Content.Repository.NameWithOwner, Number: n.Content.Number, Closed: n.Content.Closed, Fields: n.FieldValues.toMap()})
+			items = append(items, Item{ID: n.ID, Repo: n.Content.Repository.NameWithOwner, Number: n.Content.Number, Closed: n.Content.Closed, UpdatedAt: parseTime(n.Content.UpdatedAt), Fields: n.FieldValues.toMap()})
 		}
 		if !res.Node.Items.PageInfo.HasNextPage {
 			return items, nil
@@ -238,12 +243,13 @@ func (c *Client) ProjectItems(ctx context.Context, projectID string) ([]Item, er
 func (c *Client) IssueItem(ctx context.Context, repo string, number int, projectID string) (item Item, ok bool, err error) {
 	owner, name, _ := strings.Cut(repo, "/")
 	const q = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){
-  number closed repository{nameWithOwner} projectItems(first:50){nodes{id project{id} ` + fieldValuesSelection + `}}}}}`
+  number closed updatedAt repository{nameWithOwner} projectItems(first:50){nodes{id project{id} ` + fieldValuesSelection + `}}}}}`
 	var res struct {
 		Repository struct {
 			Issue *struct {
-				Number     int  `json:"number"`
-				Closed     bool `json:"closed"`
+				Number     int    `json:"number"`
+				Closed     bool   `json:"closed"`
+				UpdatedAt  string `json:"updatedAt"`
 				Repository struct {
 					NameWithOwner string `json:"nameWithOwner"`
 				} `json:"repository"`
@@ -273,10 +279,19 @@ func (c *Client) IssueItem(ctx context.Context, repo string, number int, project
 	}
 	for _, n := range is.ProjectItems.Nodes {
 		if n.Project.ID == projectID {
-			return Item{ID: n.ID, Repo: is.Repository.NameWithOwner, Number: is.Number, Closed: is.Closed, Fields: n.FieldValues.toMap()}, true, nil
+			return Item{ID: n.ID, Repo: is.Repository.NameWithOwner, Number: is.Number, Closed: is.Closed, UpdatedAt: parseTime(is.UpdatedAt), Fields: n.FieldValues.toMap()}, true, nil
 		}
 	}
 	return Item{}, false, nil
+}
+
+// parseTime parses a GitHub timestamp; a malformed one is zero.
+func parseTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // Comment is an issue comment's body and creation time.
