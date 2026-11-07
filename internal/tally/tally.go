@@ -19,6 +19,7 @@ import (
 type GitHub interface {
 	Issue(ctx context.Context, repo string, number int) (github.Issue, error)
 	Comments(ctx context.Context, repo string, number int) ([]string, error)
+	CommentMarkers(ctx context.Context, repo string, number int, fn func(m markers.Marker) error) error
 	PostComment(ctx context.Context, repo string, number int, body string) (int64, error)
 	EditIssueBody(ctx context.Context, repo string, number int, body string) error
 	CloseIssue(ctx context.Context, repo string, number int, reason github.CloseReason) error
@@ -101,11 +102,13 @@ func (t *Tally) markers(ctx context.Context, ref queue.Ref) (string, int, []mark
 	if !ok {
 		return "", 0, nil, fmt.Errorf("bad issue ref %q", ref)
 	}
-	bodies, err := t.gh.Comments(ctx, repo, n)
-	if err != nil {
+	var ms []markers.Marker
+	if err := t.gh.CommentMarkers(ctx, repo, n, func(m markers.Marker) error {
+		ms = append(ms, m)
+		return nil
+	}); err != nil {
 		return "", 0, nil, err
 	}
-	ms, _ := markers.Collect(bodies)
 	return repo, n, ms, nil
 }
 

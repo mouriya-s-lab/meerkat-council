@@ -59,6 +59,18 @@ func (f *fakeGitHub) IssueComments(_ context.Context, _ string, n int) ([]github
 	return f.comments[n], nil
 }
 
+func (f *fakeGitHub) EachComment(_ context.Context, _ string, n int, fn func(string, time.Time) error) error {
+	if f.commentsCalls != nil {
+		f.commentsCalls[n]++
+	}
+	for _, c := range f.comments[n] {
+		if err := fn(c.Body, c.CreatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (f *fakeGitHub) BlockedBy(_ context.Context, _ string, n int) ([]github.IssueRef, error) {
 	if f.blockedCalls != nil {
 		f.blockedCalls[n]++

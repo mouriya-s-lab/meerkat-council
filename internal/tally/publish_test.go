@@ -99,6 +99,26 @@ func (f *fakeGitHub) Comments(_ context.Context, repo string, n int) ([]string, 
 	return slices.Clone(is.comments), nil
 }
 
+func (f *fakeGitHub) CommentMarkers(_ context.Context, repo string, n int, fn func(m markers.Marker) error) error {
+	if err := f.read(); err != nil {
+		return err
+	}
+	is, err := f.issue(repo, n)
+	if err != nil {
+		return err
+	}
+	for _, b := range is.comments {
+		// Malformed markers are skipped, as markers.Collect did at the call
+		// sites CommentMarkers replaces (`ms, _`); only fn errors abort.
+		if m, err := markers.Parse(b); err == nil {
+			if err := fn(m); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (f *fakeGitHub) PostComment(_ context.Context, repo string, n int, body string) (int64, error) {
 	if err := f.mutate(); err != nil {
 		return 0, err

@@ -331,12 +331,14 @@ func (pb *publish) refusal(ctx context.Context, ref string) (string, error) {
 	case it.Fields[f.Status.Name] == f.Status.Options.Done:
 		return "already decided", nil
 	}
-	bodies, err := pb.gh.Comments(ctx, repo, n)
-	if err != nil {
+	decided := false
+	if err := pb.gh.CommentMarkers(ctx, repo, n, func(m markers.Marker) error {
+		decided = decided || m.Kind() == markers.KindDecision
+		return nil
+	}); err != nil {
 		return "", err
 	}
-	ms, _ := markers.Collect(bodies)
-	if slices.ContainsFunc(ms, func(m markers.Marker) bool { return m.Kind() == markers.KindDecision }) {
+	if decided {
 		return "already decided", nil
 	}
 	return "", nil
@@ -364,12 +366,14 @@ func (pb *publish) supersede(ctx context.Context, refs []string) error {
 		if !ok {
 			return fmt.Errorf("superseded %q is not owner/repo#n", ref)
 		}
-		bodies, err := pb.gh.Comments(ctx, repo, n)
-		if err != nil {
+		superseded := false
+		if err := pb.gh.CommentMarkers(ctx, repo, n, func(m markers.Marker) error {
+			superseded = superseded || m.Kind() == markers.KindSuperseded
+			return nil
+		}); err != nil {
 			return err
 		}
-		ms, _ := markers.Collect(bodies)
-		if !slices.ContainsFunc(ms, func(m markers.Marker) bool { return m.Kind() == markers.KindSuperseded }) {
+		if !superseded {
 			text := fmt.Sprintf("本议题被人类议题 %s 变更，不再审议。", pb.p.Ref)
 			if _, err := pb.post(ctx, repo, n, text, markers.Superseded{By: string(pb.p.Ref)}); err != nil {
 				return err
@@ -417,18 +421,17 @@ func (pb *publish) settle(ctx context.Context, dec markers.Decision, replacement
 	if !ok {
 		return fmt.Errorf("escalation issue %q is not owner/repo#n", pb.esc.Issue)
 	}
-	bodies, err := pb.gh.Comments(ctx, repo, n)
-	if err != nil {
-		return err
-	}
 	replied, replaced := false, false
-	for _, b := range bodies {
-		switch m, _ := markers.Parse(b); m := m.(type) {
+	if err := pb.gh.CommentMarkers(ctx, repo, n, func(m markers.Marker) error {
+		switch m := m.(type) {
 		case markers.Reply:
 			replied = replied || m.Ask == pb.esc.Ask
 		case markers.Replaced:
 			replaced = replaced || m.Ask != nil && *m.Ask == pb.esc.Ask
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	switch {
 	case replied:
