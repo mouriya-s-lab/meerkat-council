@@ -80,16 +80,16 @@ interface CommentBody {
 
 async function readIssue(repo: string, number: number, signal: AbortSignal | undefined): Promise<string> {
 	const issue = (await github(`repos/${repo}/issues/${number}`, signal)).body as IssueBody;
-	const parts = [`# ${issue.title}`, `${repo}#${number} · ${issue.state} · by ${issue.user?.login ?? "?"}`, issue.body ?? ""];
+	let text = `# ${issue.title}\n\n${repo}#${number} · ${issue.state} · by ${issue.user?.login ?? "?"}\n\n${issue.body ?? ""}`;
 	let page: string | null = `repos/${repo}/issues/${number}/comments?per_page=100`;
 	while (page) {
 		const { body, next } = await github(page, signal);
 		for (const c of body as CommentBody[]) {
-			parts.push(`---\n## comment ${c.id} by ${c.user?.login ?? "?"} at ${c.created_at}\n\n${c.body ?? ""}`);
+			text += `\n\n---\n## comment ${c.id} by ${c.user?.login ?? "?"} at ${c.created_at}\n\n${c.body ?? ""}`;
 		}
 		page = next;
 	}
-	return parts.join("\n\n");
+	return text;
 }
 
 export default function pmCouncil(pi: ExtensionAPI): void {
