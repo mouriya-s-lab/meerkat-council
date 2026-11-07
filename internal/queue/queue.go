@@ -118,7 +118,8 @@ type Entry struct {
 	Notes     []string `json:"notes"`
 	Panel     *Panel   `json:"panel"`
 	// Closed is whether the issue is closed. A closed issue is never convened or resumed, and a
-	// closed human issue holds no agenda issue; its state is derived as for an open one.
+	// closed human issue neither holds nor blocks another issue; its own state is derived as for
+	// an open one.
 	Closed bool `json:"closed"`
 
 	human   bool
@@ -192,7 +193,8 @@ func Build(s Snapshot) Queue {
 				continue
 			}
 			e.BlockedBy = append(e.BlockedBy, p)
-			if !decided(*pre) {
+			// A closed prerequisite counts as resolved, as GitHub treats a closed blocker.
+			if !pre.Closed && !decided(*pre) {
 				waiting = true
 			}
 		}

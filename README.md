@@ -83,13 +83,13 @@ The daemon serves these; every response carries `Access-Control-Allow-Origin: *`
 
 The app serves only `POST /webhook`: `401` for a missing or wrong signature, `200` for `ping`, `202` otherwise (forwarded or not), `502` when the daemon does not accept the forward, `413` above 25 MiB.
 
-Queue fields: `agenda` and `status` are the Project field values (`null` when unset); `closed` is whether the issue is closed (a closed issue is never convened or resumed, and a closed human issue holds no other issue); `blockedBy` lists the human prerequisites ("Blocked by" pointing at an issue in the Project with the human Kind); any other "Blocked by" is ignored and named in `notes`. `state` is the first that holds:
+Queue fields: `agenda` and `status` are the Project field values (`null` when unset); `closed` is whether the issue is closed (a closed issue is never convened or resumed, and a closed human issue neither holds nor blocks another issue); `blockedBy` lists the human prerequisites ("Blocked by" pointing at an issue in the Project with the human Kind); any other "Blocked by" is ignored and named in `notes`. `state` is the first that holds:
 
 | `state` | holds when |
 |---|---|
 | `decided` | `Status` is the done option, or a `pm:decision` comment exists |
 | `superseded` | `Status` is the superseded option, or a `pm:superseded` comment exists |
-| `blocked` | a human prerequisite is not decided |
+| `blocked` | an open human prerequisite is not decided |
 | `held` | the issue is not human and some open human issue is not decided |
 | `deliberating` | the latest `pm:panel` event is `started` or `resumed` |
 | `interrupted` | the latest `pm:panel` event is `interrupted` |

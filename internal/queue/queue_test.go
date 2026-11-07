@@ -314,6 +314,7 @@ func TestClosedIssues(t *testing.T) {
 		closed(issue(3, KindAgenda, StatusInProgress, "D3", panelEv(markers.PanelFailed, 1))),      // failed, closed
 		closed(issue(4, KindAgenda, StatusInProgress, "D4", panelEv(markers.PanelInterrupted, 1))), // interrupted, closed
 		closed(issue(5, KindHuman, StatusInProgress, "D5", panelEv(markers.PanelStarted, 1))),      // undecided human, closed
+		blocked(issue(6, KindAgenda, StatusTodo, "D6"), 5),                                         // its prerequisite is closed: ready
 	}
 	q := Build(Snapshot{AgendaPrefix: "D", Issues: issues})
 	if HumanPending(q) {
@@ -325,12 +326,12 @@ func TestClosedIssues(t *testing.T) {
 	}
 	want := map[Ref]string{
 		ref(1): "interrupted closed=false", ref(2): "ready closed=true", ref(3): "failed closed=true",
-		ref(4): "interrupted closed=true", ref(5): "deliberating closed=true",
+		ref(4): "interrupted closed=true", ref(5): "deliberating closed=true", ref(6): "ready closed=false",
 	}
 	if !reflect.DeepEqual(states, want) {
 		t.Errorf("states = %v, want %v", states, want)
 	}
-	if got := Candidates(q, nil, time.Now()); !reflect.DeepEqual(got, []Candidate{{ref(1), StartResume}}) {
+	if got := Candidates(q, nil, time.Now()); !reflect.DeepEqual(got, []Candidate{{ref(1), StartResume}, {ref(6), StartConvene}}) {
 		t.Errorf("Candidates = %v", got)
 	}
 	for _, tc := range []struct {
