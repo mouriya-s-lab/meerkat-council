@@ -7,6 +7,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -25,7 +26,7 @@ import (
 type GitHub interface {
 	ProjectItems(ctx context.Context, projectID string) ([]github.Item, error)
 	IssueItem(ctx context.Context, repo string, number int, projectID string) (github.Item, bool, error)
-	Comments(ctx context.Context, repo string, number int) ([]string, error)
+	IssueComments(ctx context.Context, repo string, number int) ([]github.Comment, error)
 	BlockedBy(ctx context.Context, repo string, number int) ([]github.IssueRef, error)
 	SetText(ctx context.Context, projectID, itemID, fieldID, text string) error
 	SetOption(ctx context.Context, projectID, itemID, fieldID, optionID string) error
@@ -57,6 +58,7 @@ type Daemon struct {
 	gh       GitHub
 	project  github.Project
 	panels   Panels
+	started  time.Time
 	events   chan int
 	finished chan *livePanel
 	queue    atomic.Pointer[queue.Queue]
@@ -66,10 +68,11 @@ type Daemon struct {
 	live    map[int]*livePanel
 }
 
-// New performs the startup full rebuild (with admission) and returns the daemon ready to Run.
+// New records the process start time, performs the startup full rebuild (with admission) and
+// returns the daemon ready to Run.
 func New(ctx context.Context, cfg *config.Config, gh GitHub, project github.Project, panels Panels) (*Daemon, error) {
 	d := &Daemon{
-		cfg: cfg, gh: gh, project: project, panels: panels,
+		cfg: cfg, gh: gh, project: project, panels: panels, started: time.Now(),
 		events: make(chan int, 64), finished: make(chan *livePanel),
 		records: map[int]record{}, live: map[int]*livePanel{},
 	}
@@ -99,14 +102,16 @@ func (d *Daemon) Notify(ctx context.Context, number int) error {
 }
 
 // Run serves events, panel completions and periodic full rebuilds until ctx ends, then waits for
-// every live panel to end. The startup rebuild done by New counts as a full rebuild.
+// every live panel to end. The startup rebuild done by New counts as a full rebuild. Full rebuilds
+// resume failed and orphaned panels whose latest pm:panel predates the process start; refreshes
+// resume none of them.
 func (d *Daemon) Run(ctx context.Context) {
 	tick := time.NewTicker(d.cfg.Runtime.Daemon.RebuildInterval())
 	defer tick.Stop()
 	defer d.waitPanels()
-	d.schedule(ctx, true)
+	d.schedule(ctx, d.started)
 	for {
-		full := false
+		var resumeBefore time.Time
 		select {
 		case <-ctx.Done():
 			return
@@ -116,7 +121,7 @@ func (d *Daemon) Run(ctx context.Context) {
 				continue
 			}
 			slog.Info("full rebuild", "issues", len(d.records))
-			full = true
+			resumeBefore = d.started
 		case n := <-d.events:
 			if err := d.refresh(ctx, n); err != nil {
 				slog.Error("issue refresh failed", "issue", n, "err", err)
@@ -133,7 +138,7 @@ func (d *Daemon) Run(ctx context.Context) {
 			}
 		}
 		d.admitAndPublish(ctx)
-		d.schedule(ctx, full)
+		d.schedule(ctx, resumeBefore)
 	}
 }
 
@@ -173,8 +178,9 @@ func (d *Daemon) refreshDecided(ctx context.Context, number int) error {
 
 // schedule applies the panel rule after a published queue: while a human issue is undecided,
 // interrupt every live panel of a non-human issue and wait until each has posted; then start
-// panels for the queue's candidates up to maxConcurrentPanels.
-func (d *Daemon) schedule(ctx context.Context, fullRebuild bool) {
+// panels for the queue's candidates (queue.Candidates with resumeBefore) up to
+// maxConcurrentPanels.
+func (d *Daemon) schedule(ctx context.Context, resumeBefore time.Time) {
 	q := d.Queue()
 	if queue.HumanPending(q) {
 		var stopped []*livePanel
@@ -201,7 +207,7 @@ func (d *Daemon) schedule(ctx context.Context, fullRebuild bool) {
 		}
 	}
 	slots := d.cfg.Council.MaxConcurrentPanels - len(d.live)
-	for _, c := range queue.Candidates(q, live, fullRebuild) {
+	for _, c := range queue.Candidates(q, live, resumeBefore) {
 		if slots <= 0 {
 			return
 		}
@@ -291,14 +297,23 @@ func (d *Daemon) read(ctx context.Context, it github.Item) (record, error) {
 	if is.Kind == queue.KindNone {
 		slog.Info("issue has no Kind; not on the agenda", "issue", ref, "field", p.Kind.Name, "value", it.Fields[p.Kind.Name])
 	}
-	bodies, err := d.gh.Comments(ctx, it.Repo, it.Number)
+	comments, err := d.gh.IssueComments(ctx, it.Repo, it.Number)
 	if err != nil {
 		return record{}, err
 	}
-	var errs []error
-	is.Markers, errs = markers.Collect(bodies)
-	for _, err := range errs {
-		slog.Error("ignoring malformed marker", "issue", ref, "err", err)
+	// The markers as markers.Collect gives them, and the time of the comment of the latest pm:panel.
+	for _, c := range comments {
+		m, err := markers.Parse(c.Body)
+		switch {
+		case errors.Is(err, markers.ErrNoMarker):
+		case err != nil:
+			slog.Error("ignoring malformed marker", "issue", ref, "err", err)
+		default:
+			is.Markers = append(is.Markers, m)
+			if m.Kind() == markers.KindPanel {
+				is.PanelAt = c.CreatedAt
+			}
+		}
 	}
 	blockers, err := d.gh.BlockedBy(ctx, it.Repo, it.Number)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/oh-my-omp/pm-council/internal/markers"
 )
@@ -67,6 +68,9 @@ type Issue struct {
 	BlockedBy []Ref
 	// Markers are the council markers of the issue's comments, oldest first.
 	Markers []markers.Marker
+	// PanelAt is the creation time of the comment holding the latest pm:panel marker; zero
+	// without one.
+	PanelAt time.Time
 }
 
 // Seat is what the queue needs to know about a council seat.
@@ -107,9 +111,10 @@ type Entry struct {
 	Notes     []string `json:"notes"`
 	Panel     *Panel   `json:"panel"`
 
-	human  bool
-	number int // agenda number, 0 when absent or of another prefix
-	issue  int
+	human   bool
+	number  int // agenda number, 0 when absent or of another prefix
+	issue   int
+	panelAt time.Time
 	// unpublished: decided by a pm:decision whose publish has not reached its last write,
 	// Status=Done.
 	unpublished bool
@@ -157,6 +162,7 @@ func Build(s Snapshot) Queue {
 			human:     is.Kind == KindHuman,
 			number:    AgendaNumber(s.AgendaPrefix, is.Agenda),
 			issue:     is.Number,
+			panelAt:   is.PanelAt,
 		}
 		if e.human {
 			e.Kind = kindHuman
@@ -324,11 +330,13 @@ type Candidate struct {
 }
 
 // Candidates returns, in queue order, the issues without a live panel that a panel may be started
-// for: ready ones are convened; interrupted ones are resumed; failed ones, deliberating ones
-// without a live panel (orphans of an earlier process) and decided ones whose decision is not
-// fully published are resumed only on a full rebuild. Superseded, held and blocked issues are
-// never candidates.
-func Candidates(q Queue, live map[Ref]bool, fullRebuild bool) []Candidate {
+// for: ready ones are convened; interrupted ones are resumed; failed ones, and deliberating ones
+// without a live panel, are resumed only when their latest pm:panel comment was created before
+// resumeBefore, so a panel that failed or was left in this daemon process is never restarted by
+// it; decided ones whose decision is not fully published are resumed on every full rebuild. The
+// daemon passes its start time on full rebuilds and the zero time, which resumes none of them, on
+// single-issue refreshes. Superseded, held and blocked issues are never candidates.
+func Candidates(q Queue, live map[Ref]bool, resumeBefore time.Time) []Candidate {
 	var out []Candidate
 	for _, e := range q {
 		if live[e.Ref] {
@@ -340,11 +348,11 @@ func Candidates(q Queue, live map[Ref]bool, fullRebuild bool) []Candidate {
 		case StateInterrupted:
 			out = append(out, Candidate{e.Ref, StartResume})
 		case StateFailed, StateDeliberating:
-			if fullRebuild {
+			if e.panelAt.Before(resumeBefore) {
 				out = append(out, Candidate{e.Ref, StartResume})
 			}
 		case StateDecided:
-			if e.unpublished && fullRebuild {
+			if e.unpublished && !resumeBefore.IsZero() {
 				out = append(out, Candidate{e.Ref, StartResume})
 			}
 		case StateSuperseded, StateBlocked, StateHeld:
