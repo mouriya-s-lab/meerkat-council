@@ -365,3 +365,58 @@ func TestScheduleStopsPanelsOfIssuesThatLeftDeliberation(t *testing.T) {
 		t.Fatalf("live = %v", d.live)
 	}
 }
+
+// The panel's own publish closes the issue before setting Status=Done; the issues closed event
+// that follows must not stop the panel that is still publishing, while a closed issue without a
+// pm:decision still has its panel stopped.
+func TestScheduleKeepsThePanelPublishingItsDecision(t *testing.T) {
+	gh := &fakeGitHub{items: []github.Item{
+		{ID: "i1", Repo: "o/pm", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
+		{ID: "i2", Repo: "o/pm", Number: 2, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D2", "Status": "Todo"}},
+	}}
+	cfg := testConfig()
+	cfg.Council.MaxConcurrentPanels = 2
+	fp := &fakePanels{started: make(chan panel.Job, 8), ended: make(chan error, 8)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := New(ctx, cfg, gh, project, fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.schedule(ctx, d.started)
+	for range 2 {
+		<-fp.started
+	}
+
+	decision, err := markers.Comment("", markers.Decision{
+		Version:    1,
+		Rows:       []markers.DecisionRow{{Row: "r1", Outcome: markers.OutcomePassed, Approve: 1, Threshold: 1, Reason: "approve 1 meets threshold 1"}},
+		Impl:       []string{},
+		Superseded: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh.comments = map[int][]github.Comment{1: {{Body: decision}}}
+	gh.items[0].Closed = true
+	gh.items[0].Fields["Status"] = "In Progress"
+	gh.items[1].Closed = true
+	for _, n := range []int{1, 2} {
+		if err := d.refresh(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.admitAndPublish(ctx)
+	d.schedule(ctx, time.Time{})
+	if cause := <-fp.ended; !errors.Is(cause, panel.ErrLeftDeliberation) {
+		t.Fatalf("cause = %v, want %v", cause, panel.ErrLeftDeliberation)
+	}
+	if len(d.live) != 1 || d.live[1] == nil {
+		t.Fatalf("live = %v, want only the publishing panel of o/pm#1", d.live)
+	}
+	select {
+	case cause := <-fp.ended:
+		t.Fatalf("the publishing panel ended: %v", cause)
+	default:
+	}
+}

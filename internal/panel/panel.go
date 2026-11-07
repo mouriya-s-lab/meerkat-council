@@ -48,7 +48,8 @@ type Tally interface {
 var ErrInterrupted = errors.New("interrupted for a human issue")
 
 // ErrLeftDeliberation is the cancel cause the daemon gives a panel whose issue was closed or set
-// to done or superseded. The panel is not resumed, so it posts nothing.
+// to done or superseded before it carried a pm:decision. The panel is not resumed, so it posts
+// nothing.
 var ErrLeftDeliberation = errors.New("the issue left deliberation")
 
 // HumanIssue is a human issue of the snapshot the panel was started from.

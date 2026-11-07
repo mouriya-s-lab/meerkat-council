@@ -75,8 +75,13 @@ type Issue struct {
 }
 
 // LeftDeliberation reports whether the issue can no longer be deliberated: it is closed, or its
-// Status is the done or superseded option. A live panel of such an issue is stopped.
+// Status is the done or superseded option, and it carries no pm:decision. A live panel of such an
+// issue is stopped. An issue with a pm:decision is being published by its own panel, which closes
+// it and then sets Status=Done; stopping that panel would leave the publish unfinished.
 func (is Issue) LeftDeliberation() bool {
+	if hasKind(is.Markers, markers.KindDecision) {
+		return false
+	}
 	return is.Closed || is.Status == StatusDone || is.Status == StatusSuperseded
 }
 
@@ -117,9 +122,9 @@ type Entry struct {
 	State     State    `json:"state"`
 	Notes     []string `json:"notes"`
 	Panel     *Panel   `json:"panel"`
-	// Closed is whether the issue is closed. A closed issue is never convened or resumed, and a
-	// closed human issue neither holds nor blocks another issue; its own state is derived as for
-	// an open one.
+	// Closed is whether the issue is closed. A closed issue is never convened or resumed, except a
+	// decided one whose publish is unfinished, and a closed human issue neither holds nor blocks
+	// another issue; its own state is derived as for an open one.
 	Closed bool `json:"closed"`
 
 	human   bool
@@ -342,18 +347,19 @@ type Candidate struct {
 	Start Start
 }
 
-// Candidates returns, in queue order, the open issues without a live panel that a panel may be
-// started for: ready ones are convened; interrupted ones are resumed; failed ones, and
-// deliberating ones without a live panel, are resumed only when their latest pm:panel comment was
-// created before resumeBefore, so a panel that failed or was left in this daemon process is never
-// restarted by it; decided ones whose decision is not fully published are resumed on every full
-// rebuild. The daemon passes its start time on full rebuilds and the zero time, which resumes none
-// of them, on single-issue refreshes. Closed, superseded, held and blocked issues are never
-// candidates.
+// Candidates returns, in queue order, the issues without a live panel that a panel may be started
+// for: ready ones are convened; interrupted ones are resumed; failed ones, and deliberating ones
+// without a live panel, are resumed only when their latest pm:panel comment was created before
+// resumeBefore, so a panel that failed or was left in this daemon process is never restarted by
+// it; decided ones whose decision is not fully published are resumed on every full rebuild. The
+// daemon passes its start time on full rebuilds and the zero time, which resumes none of them, on
+// single-issue refreshes. Closed issues are never candidates except a decided one whose publish is
+// unfinished: the publish closes the issue before its last write, Status=Done. Superseded, held
+// and blocked issues are never candidates.
 func Candidates(q Queue, live map[Ref]bool, resumeBefore time.Time) []Candidate {
 	var out []Candidate
 	for _, e := range q {
-		if live[e.Ref] || e.Closed {
+		if live[e.Ref] || (e.Closed && !(e.State == StateDecided && e.unpublished)) {
 			continue
 		}
 		switch e.State {

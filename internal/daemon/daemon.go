@@ -196,7 +196,8 @@ func (d *Daemon) refreshDecided(ctx context.Context, number int) error {
 }
 
 // schedule applies the panel rule after a published queue: stop the live panel of every issue
-// that left deliberation (closed, done or superseded); while a human issue is undecided,
+// that left deliberation (closed, done or superseded, and without a pm:decision the panel is
+// publishing); while a human issue is undecided,
 // interrupt every other live panel of a non-human issue; wait until each stopped panel has ended;
 // then start panels for the queue's candidates (queue.Candidates with resumeBefore) up to
 // maxConcurrentPanels.

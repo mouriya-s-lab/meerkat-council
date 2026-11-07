@@ -308,13 +308,16 @@ func TestCandidates(t *testing.T) {
 
 func TestClosedIssues(t *testing.T) {
 	closed := func(is Issue) Issue { is.Closed = true; return is }
+	decision := markers.Decision{Version: 1, Rows: []markers.DecisionRow{}, Impl: []string{}, Superseded: []string{}}
 	issues := []Issue{
-		issue(1, KindAgenda, StatusInProgress, "D1", panelEv(markers.PanelInterrupted, 1)),         // interrupted
-		closed(issue(2, KindAgenda, StatusTodo, "D2")),                                             // ready, closed
-		closed(issue(3, KindAgenda, StatusInProgress, "D3", panelEv(markers.PanelFailed, 1))),      // failed, closed
-		closed(issue(4, KindAgenda, StatusInProgress, "D4", panelEv(markers.PanelInterrupted, 1))), // interrupted, closed
-		closed(issue(5, KindHuman, StatusInProgress, "D5", panelEv(markers.PanelStarted, 1))),      // undecided human, closed
-		blocked(issue(6, KindAgenda, StatusTodo, "D6"), 5),                                         // its prerequisite is closed: ready
+		issue(1, KindAgenda, StatusInProgress, "D1", panelEv(markers.PanelInterrupted, 1)),               // interrupted
+		closed(issue(2, KindAgenda, StatusTodo, "D2")),                                                   // ready, closed
+		closed(issue(3, KindAgenda, StatusInProgress, "D3", panelEv(markers.PanelFailed, 1))),            // failed, closed
+		closed(issue(4, KindAgenda, StatusInProgress, "D4", panelEv(markers.PanelInterrupted, 1))),       // interrupted, closed
+		closed(issue(5, KindHuman, StatusInProgress, "D5", panelEv(markers.PanelStarted, 1))),            // undecided human, closed
+		blocked(issue(6, KindAgenda, StatusTodo, "D6"), 5),                                               // its prerequisite is closed: ready
+		closed(issue(7, KindAgenda, StatusInProgress, "D7", panelEv(markers.PanelStarted, 1), decision)), // publish closed it, Done not yet written
+		closed(issue(8, KindAgenda, StatusDone, "D8", panelEv(markers.PanelStarted, 1), decision)),       // published
 	}
 	q := Build(Snapshot{AgendaPrefix: "D", Issues: issues})
 	if HumanPending(q) {
@@ -327,12 +330,17 @@ func TestClosedIssues(t *testing.T) {
 	want := map[Ref]string{
 		ref(1): "interrupted closed=false", ref(2): "ready closed=true", ref(3): "failed closed=true",
 		ref(4): "interrupted closed=true", ref(5): "deliberating closed=true", ref(6): "ready closed=false",
+		ref(7): "decided closed=true", ref(8): "decided closed=true",
 	}
 	if !reflect.DeepEqual(states, want) {
 		t.Errorf("states = %v, want %v", states, want)
 	}
-	if got := Candidates(q, nil, time.Now()); !reflect.DeepEqual(got, []Candidate{{ref(1), StartResume}, {ref(6), StartConvene}}) {
-		t.Errorf("Candidates = %v", got)
+	// A full rebuild finishes the unfinished publish of the closed #7; a refresh resumes nothing closed.
+	if got := Candidates(q, nil, time.Now()); !reflect.DeepEqual(got, []Candidate{{ref(1), StartResume}, {ref(6), StartConvene}, {ref(7), StartResume}}) {
+		t.Errorf("Candidates on a full rebuild = %v", got)
+	}
+	if got := Candidates(q, nil, time.Time{}); !reflect.DeepEqual(got, []Candidate{{ref(1), StartResume}, {ref(6), StartConvene}}) {
+		t.Errorf("Candidates on a refresh = %v", got)
 	}
 	for _, tc := range []struct {
 		is   Issue
@@ -343,6 +351,8 @@ func TestClosedIssues(t *testing.T) {
 		{closed(issue(1, KindAgenda, StatusInProgress, "D1")), true},
 		{issue(1, KindAgenda, StatusDone, "D1"), true},
 		{issue(1, KindHuman, StatusSuperseded, "D1"), true},
+		{closed(issue(1, KindAgenda, StatusInProgress, "D1", decision)), false}, // its panel is publishing
+		{issue(1, KindAgenda, StatusDone, "D1", decision), false},
 	} {
 		if got := tc.is.LeftDeliberation(); got != tc.left {
 			t.Errorf("LeftDeliberation(%+v) = %t", tc.is, got)
