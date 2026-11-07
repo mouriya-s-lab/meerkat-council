@@ -3,11 +3,15 @@ package panel
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/oh-my-omp/pm-council/internal/config"
 	"github.com/oh-my-omp/pm-council/internal/markers"
+	"github.com/oh-my-omp/pm-council/internal/queue"
 	"github.com/oh-my-omp/pm-council/internal/sessions"
 	"github.com/oh-my-omp/pm-council/internal/tally"
 )
@@ -106,6 +110,31 @@ func TestRulingCovers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := rulingCovers(tc.rows, disputes, cats); (err == nil) != tc.ok {
 				t.Errorf("rulingCovers = %v, want ok %v", err, tc.ok)
+			}
+		})
+	}
+}
+
+func TestForkFile(t *testing.T) {
+	existing := filepath.Join(t.TempDir(), "s1.jsonl")
+	if err := os.WriteFile(existing, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(t.TempDir(), "gone.jsonl")
+	r := &run{Runner: &Runner{}, job: Job{Ref: queue.Ref("o/r#7")}}
+	for _, tc := range []struct {
+		name string
+		fork *markers.PanelSession
+		want string
+	}{
+		{"nil fork starts fresh", nil, ""},
+		{"empty file starts fresh", &markers.PanelSession{Seat: "Argon", Kind: "vote"}, ""},
+		{"missing file starts fresh", &markers.PanelSession{Seat: "Argon", Kind: "vote", File: missing}, ""},
+		{"existing file forks", &markers.PanelSession{Seat: "Argon", Kind: "vote", File: existing}, existing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := r.forkFile(config.KindVote, "Argon", tc.fork); got != tc.want {
+				t.Errorf("forkFile = %q, want %q", got, tc.want)
 			}
 		})
 	}
