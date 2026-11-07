@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/oh-my-omp/pm-council/internal/markers"
 )
@@ -238,56 +239,65 @@ func TestOrder(t *testing.T) {
 }
 
 func TestCandidates(t *testing.T) {
+	start := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC) // the daemon process start
+	before, after := start.Add(-time.Hour), start.Add(time.Minute)
+	at := func(is Issue, t time.Time) Issue { is.PanelAt = t; return is }
 	superseded := markers.Superseded{By: string(ref(9))}
 	decision := markers.Decision{Version: 1, Rows: []markers.DecisionRow{}, Impl: []string{}, Superseded: []string{}}
 	issues := []Issue{
-		issue(1, KindAgenda, StatusTodo, "D1"),                                             // ready
-		issue(2, KindAgenda, StatusInProgress, "D2", panelEv(markers.PanelStarted, 1)),     // deliberating
-		issue(3, KindAgenda, StatusInProgress, "D3", panelEv(markers.PanelInterrupted, 1)), // interrupted
-		issue(4, KindAgenda, StatusInProgress, "D4", panelEv(markers.PanelFailed, 1)),      // failed
-		issue(5, KindAgenda, StatusInProgress, "D5", panelEv(markers.PanelInterrupted, 1), superseded),
-		issue(6, KindAgenda, StatusDone, "D6", panelEv(markers.PanelStarted, 1)), // decided
-		blocked(issue(7, KindAgenda, StatusTodo, "D7", panelEv(markers.PanelBlocked, 1)), 8),
+		issue(1, KindAgenda, StatusTodo, "D1"),                                                        // ready
+		at(issue(2, KindAgenda, StatusInProgress, "D2", panelEv(markers.PanelStarted, 1)), before),    // orphaned deliberating
+		at(issue(3, KindAgenda, StatusInProgress, "D3", panelEv(markers.PanelInterrupted, 1)), after), // interrupted
+		at(issue(4, KindAgenda, StatusInProgress, "D4", panelEv(markers.PanelFailed, 1)), before),     // failed before the start
+		at(issue(5, KindAgenda, StatusInProgress, "D5", panelEv(markers.PanelInterrupted, 1), superseded), before),
+		at(issue(6, KindAgenda, StatusDone, "D6", panelEv(markers.PanelStarted, 1)), before), // decided
+		blocked(at(issue(7, KindAgenda, StatusTodo, "D7", panelEv(markers.PanelBlocked, 1)), before), 8),
 		issue(8, KindHuman, StatusDone, "D8"),
 		issue(9, KindHuman, StatusDone, "D9"),
-		issue(10, KindAgenda, StatusTodo, "D10", panelEv(markers.PanelBlocked, 1)), // prerequisite decided: ready
+		at(issue(10, KindAgenda, StatusTodo, "D10", panelEv(markers.PanelBlocked, 1)), before),      // prerequisite decided: ready
+		at(issue(14, KindAgenda, StatusInProgress, "D14", panelEv(markers.PanelResumed, 1)), after), // deliberating, left in this process
+		at(issue(15, KindAgenda, StatusInProgress, "D15", panelEv(markers.PanelFailed, 1)), after),  // failed in this process
 	}
 	type c = Candidate
 	for _, tc := range []struct {
-		name   string
-		issues []Issue
-		live   map[Ref]bool
-		full   bool
-		want   []Candidate
+		name         string
+		issues       []Issue
+		live         map[Ref]bool
+		resumeBefore time.Time
+		want         []Candidate
 	}{
-		{"event", issues, nil, false, []Candidate{
+		{"refresh resumes no failed or deliberating issue", issues, nil, time.Time{}, []Candidate{
 			c{ref(1), StartConvene}, c{ref(3), StartResume}, c{ref(7), StartConvene}, c{ref(10), StartConvene},
 		}},
-		{"full rebuild adds failed and orphaned deliberating", issues, nil, true, []Candidate{
+		{"full rebuild resumes failed and orphaned panels from before the start", issues, nil, start, []Candidate{
 			c{ref(1), StartConvene}, c{ref(2), StartResume}, c{ref(3), StartResume}, c{ref(4), StartResume},
 			c{ref(7), StartConvene}, c{ref(10), StartConvene},
 		}},
-		{"live panels are skipped", issues, map[Ref]bool{ref(1): true, ref(2): true, ref(3): true}, true, []Candidate{
+		{"a restart resumes what failed or was left in the earlier process", issues, nil, after.Add(time.Hour), []Candidate{
+			c{ref(1), StartConvene}, c{ref(2), StartResume}, c{ref(3), StartResume}, c{ref(4), StartResume},
+			c{ref(7), StartConvene}, c{ref(10), StartConvene}, c{ref(14), StartResume}, c{ref(15), StartResume},
+		}},
+		{"live panels are skipped", issues, map[Ref]bool{ref(1): true, ref(2): true, ref(3): true}, start, []Candidate{
 			c{ref(4), StartResume}, c{ref(7), StartConvene}, c{ref(10), StartConvene},
 		}},
-		{"undecided human holds every agenda issue", append(slices.Clone(issues), issue(11, KindHuman, StatusTodo, "D11")), nil, true, []Candidate{
+		{"undecided human holds every agenda issue", append(slices.Clone(issues), issue(11, KindHuman, StatusTodo, "D11")), nil, start, []Candidate{
 			c{ref(11), StartConvene},
 		}},
 		{"interrupted human issue resumes", []Issue{
-			issue(12, KindHuman, StatusInProgress, "D12", panelEv(markers.PanelInterrupted, 1)),
+			at(issue(12, KindHuman, StatusInProgress, "D12", panelEv(markers.PanelInterrupted, 1)), after),
 			issue(13, KindAgenda, StatusTodo, "D1"),
-		}, nil, false, []Candidate{c{ref(12), StartResume}}},
+		}, nil, time.Time{}, []Candidate{c{ref(12), StartResume}}},
 		{"a decision not yet Done is published again on a full rebuild only", []Issue{
 			issue(14, KindAgenda, StatusInProgress, "D14", panelEv(markers.PanelStarted, 1), decision),
 			issue(15, KindAgenda, StatusDone, "D15", panelEv(markers.PanelStarted, 1), decision),
 			issue(16, KindHuman, StatusInProgress, "D16", panelEv(markers.PanelStarted, 1), decision),
-		}, nil, true, []Candidate{c{ref(16), StartResume}, c{ref(14), StartResume}}},
+		}, nil, start, []Candidate{c{ref(16), StartResume}, c{ref(14), StartResume}}},
 		{"no publish on an event", []Issue{
 			issue(14, KindAgenda, StatusInProgress, "D14", panelEv(markers.PanelStarted, 1), decision),
-		}, nil, false, nil},
+		}, nil, time.Time{}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Candidates(Build(Snapshot{AgendaPrefix: "D", Issues: tc.issues}), tc.live, tc.full)
+			got := Candidates(Build(Snapshot{AgendaPrefix: "D", Issues: tc.issues}), tc.live, tc.resumeBefore)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("Candidates = %v, want %v", got, tc.want)
 			}

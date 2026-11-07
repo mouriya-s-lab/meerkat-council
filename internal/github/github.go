@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 
@@ -275,14 +276,26 @@ func (c *Client) IssueItem(ctx context.Context, repo string, number int, project
 	return Item{}, false, nil
 }
 
-// Comments returns the bodies of the issue's comments, oldest first.
-func (c *Client) Comments(ctx context.Context, repo string, number int) ([]string, error) {
-	type comment struct {
-		Body string `json:"body"`
-	}
-	cs, err := pages[comment](ctx, c.rest, fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", repo, number))
+// Comment is an issue comment's body and creation time.
+type Comment struct {
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// IssueComments returns the issue's comments, oldest first.
+func (c *Client) IssueComments(ctx context.Context, repo string, number int) ([]Comment, error) {
+	cs, err := pages[Comment](ctx, c.rest, fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", repo, number))
 	if err != nil {
 		return nil, fmt.Errorf("comments of %s#%d: %w", repo, number, err)
+	}
+	return cs, nil
+}
+
+// Comments returns the bodies of the issue's comments, oldest first.
+func (c *Client) Comments(ctx context.Context, repo string, number int) ([]string, error) {
+	cs, err := c.IssueComments(ctx, repo, number)
+	if err != nil {
+		return nil, err
 	}
 	bodies := make([]string, len(cs))
 	for i, c := range cs {

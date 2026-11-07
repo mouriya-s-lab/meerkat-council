@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/oh-my-omp/pm-council/internal/config"
 	"github.com/oh-my-omp/pm-council/internal/github"
@@ -29,7 +30,7 @@ type write struct{ item, field, value string }
 
 type fakeGitHub struct {
 	items    []github.Item
-	comments map[int][]string
+	comments map[int][]github.Comment
 	blockers map[int][]github.IssueRef
 	writes   []write
 }
@@ -47,7 +48,7 @@ func (f *fakeGitHub) IssueItem(_ context.Context, repo string, n int, _ string) 
 	return github.Item{}, false, nil
 }
 
-func (f *fakeGitHub) Comments(_ context.Context, _ string, n int) ([]string, error) {
+func (f *fakeGitHub) IssueComments(_ context.Context, _ string, n int) ([]github.Comment, error) {
 	return f.comments[n], nil
 }
 
@@ -159,7 +160,7 @@ func TestScheduleInterruptsForHumanIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d.schedule(ctx, true)
+	d.schedule(ctx, d.started)
 	got := map[queue.Ref]queue.Start{}
 	for range 2 {
 		j := <-fp.started
@@ -178,7 +179,7 @@ func TestScheduleInterruptsForHumanIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.admitAndPublish(ctx)
-	d.schedule(ctx, false)
+	d.schedule(ctx, time.Time{})
 	for range 2 {
 		if cause := <-fp.ended; !errors.Is(cause, panel.ErrInterrupted) {
 			t.Errorf("cause = %v", cause)
@@ -228,7 +229,7 @@ func TestPanelEndRefreshesSupersededIssues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gh.comments = map[int][]string{1: {mark}, 2: {decision}}
+	gh.comments = map[int][]github.Comment{1: {{Body: mark}}, 2: {{Body: decision}}}
 	gh.items[0].Fields = map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Superseded"}
 	gh.items[1].Fields = map[string]string{"Kind": "Human", "Agenda": "D2", "Status": "Done"}
 
@@ -236,7 +237,7 @@ func TestPanelEndRefreshesSupersededIssues(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.admitAndPublish(ctx)
-	d.schedule(ctx, false)
+	d.schedule(ctx, time.Time{})
 	if len(d.live) != 0 {
 		t.Fatalf("panels started after the supersede: %v", d.live)
 	}
@@ -252,4 +253,44 @@ func entryState(q queue.Queue, ref queue.Ref) queue.State {
 		}
 	}
 	return ""
+}
+
+// A failed panel is resumed by a full rebuild only when its pm:panel failed comment predates the
+// daemon process; refreshes resume none.
+func TestFailedResumesOnlyFromAnEarlierProcess(t *testing.T) {
+	reason := "model not found"
+	failed, err := markers.Comment("failed", markers.Panel{Event: markers.PanelFailed, Round: 1, Sessions: []markers.PanelSession{}, Error: &reason})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh := &fakeGitHub{
+		items: []github.Item{
+			{ID: "i1", Repo: "o/pm", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "In Progress"}},
+			{ID: "i2", Repo: "o/pm", Number: 2, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D2", "Status": "In Progress"}},
+		},
+		comments: map[int][]github.Comment{
+			1: {{Body: failed, CreatedAt: time.Now().Add(-time.Hour)}},
+			2: {{Body: "a note"}, {Body: failed, CreatedAt: time.Now().Add(time.Hour)}, {Body: "after the marker"}},
+		},
+	}
+	fp := &fakePanels{started: make(chan panel.Job, 8), ended: make(chan error, 8)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := testConfig()
+	cfg.Council.MaxConcurrentPanels = 2
+	d, err := New(ctx, cfg, gh, project, fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.schedule(ctx, time.Time{})
+	if len(d.live) != 0 {
+		t.Fatalf("refresh resumed %v", d.live)
+	}
+	d.schedule(ctx, d.started)
+	if j := <-fp.started; j.Ref != "o/pm#1" || j.Start != queue.StartResume {
+		t.Fatalf("job = %+v", j)
+	}
+	if len(d.live) != 1 || d.live[1] == nil {
+		t.Fatalf("live = %v", d.live)
+	}
 }
