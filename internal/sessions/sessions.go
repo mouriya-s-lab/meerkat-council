@@ -403,6 +403,7 @@ func (r *Registry) Run(ctx context.Context, s Spec) (Result, error) {
 		ReadyTimeout:       s.OMP.ReadyTimeout(),
 		ExitGrace:          s.OMP.ExitGrace(),
 		OnReady: func(id, file string) {
+			sessionID, sessionFile = id, file
 			r.mu.Lock()
 			r.live[id] = true
 			r.mu.Unlock()
