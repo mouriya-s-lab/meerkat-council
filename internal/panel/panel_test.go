@@ -1,11 +1,13 @@
 package panel
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,5 +139,47 @@ func TestForkFile(t *testing.T) {
 				t.Errorf("forkFile = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// omittedDeliverArgs is what a real draft session sends: rows whose deliver key is absent.
+const omittedDeliverArgs = `{"rows":[{"id":"S1-01","what":"决策:结论","where":"X.md","how":"读X后给结论","tradeoff":"无","category":"意图","missingDesign":false}],"supersedes":[],"settle":null,"withdrawn":null}`
+
+func TestNormalizeDeliver(t *testing.T) {
+	rows, err := normalizeDeliver(json.RawMessage(omittedDeliverArgs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ID != "S1-01" || rows[0].Deliver != nil {
+		t.Fatalf("rows = %+v", rows)
+	}
+	// The decoded rows must format as a marker whose deliver is an explicit null.
+	d := markers.Draft{Version: 1, Rows: rows, Supersedes: []string{}}
+	body, err := markers.Comment("text", d)
+	if err != nil {
+		t.Fatalf("Comment with a deliver-less row: %v", err)
+	}
+	if !strings.Contains(body, `"deliver":null`) {
+		t.Errorf("marker body %q lacks a null deliver", body)
+	}
+	if _, err := markers.Parse(body); err != nil {
+		t.Errorf("marker body does not parse back: %v", err)
+	}
+	// An explicit null deliver stays null; an object deliver keeps the object.
+	for _, tc := range []struct {
+		name        string
+		raw         string
+		wantDeliver bool // want a non-nil Deliver
+	}{
+		{"explicit null", `{"rows":[{"id":"S1-01","what":"w","where":"x","how":"h","tradeoff":"t","category":"意图","missingDesign":false,"deliver":null}],"supersedes":[],"settle":null,"withdrawn":null}`, false},
+		{"object", `{"rows":[{"id":"S1-01","what":"w","where":"x","how":"h","tradeoff":"t","category":"意图","missingDesign":false,"deliver":{"repo":"o/c","title":"t","body":"b"}}],"supersedes":[],"settle":null,"withdrawn":null}`, true},
+	} {
+		rows, err := normalizeDeliver(json.RawMessage(tc.raw))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if (rows[0].Deliver != nil) != tc.wantDeliver {
+			t.Errorf("%s: deliver = %+v, want non-nil %t", tc.name, rows[0].Deliver, tc.wantDeliver)
+		}
 	}
 }

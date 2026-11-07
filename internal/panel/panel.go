@@ -471,6 +471,40 @@ type draftArgs struct {
 	Withdrawn  *string         `json:"withdrawn"`
 }
 
+// normalizeDeliver makes every row of args carry a present deliver: a row without a deliver gets a
+// explicit null (the marker shape's "no implementation issue"), a row with a null deliver keeps it,
+// and a row with an object keeps the object. It returns the decoded rows; args is only read.
+func normalizeDeliver(args json.RawMessage) ([]markers.Row, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(args, &obj); err != nil {
+		return nil, err
+	}
+	var rawRows []json.RawMessage
+	if incoming, ok := obj["rows"]; !ok || incoming == nil {
+		rawRows = []json.RawMessage{}
+	} else if err := json.Unmarshal(incoming, &rawRows); err != nil {
+		return nil, err
+	}
+	rows := make([]markers.Row, 0, len(rawRows))
+	for i, raw := range rawRows {
+		var row map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &row); err != nil {
+			return nil, fmt.Errorf("rows[%d]: %w", i, err)
+		}
+		if _, ok := row["deliver"]; !ok {
+			row["deliver"] = json.RawMessage("null")
+		}
+		var r markers.Row
+		if fixed, err := json.Marshal(row); err != nil {
+			return nil, fmt.Errorf("rows[%d]: %w", i, err)
+		} else if err = json.Unmarshal(fixed, &r); err != nil {
+			return nil, fmt.Errorf("rows[%d]: %w", i, err)
+		}
+		rows = append(rows, r)
+	}
+	return rows, nil
+}
+
 func (p *run) postDraft(ctx context.Context, st Step, res sessions.Result) error {
 	var a draftArgs
 	if err := json.Unmarshal(res.Args, &a); err != nil {
@@ -485,6 +519,14 @@ func (p *run) postDraft(ctx context.Context, st Step, res sessions.Result) error
 	if a.Withdrawn != nil && st.Draft == nil {
 		return fmt.Errorf("session %s withdrew the first draft; only a revise session may withdraw", res.SessionID)
 	}
+	// pm_draft's schema makes deliver optional; an omitted deliver is no delivery, and the marker
+	// shape (contract §A) is a deliver object or "deliver":null — a nil Row across json.Marshal
+	// writes no deliver key, which markers.Parse would refuse. Re-decode with normalization.
+	rows, err := normalizeDeliver(res.Args)
+	if err != nil {
+		return fmt.Errorf("%s arguments of session %s: %w", res.ToolName, res.SessionID, err)
+	}
+	a.Rows = rows
 	is, err := p.read(ctx)
 	if err != nil {
 		return err
