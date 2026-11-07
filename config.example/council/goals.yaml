@@ -16,7 +16,7 @@ draft:
     步骤：
     1. 先用 pm_proxy_read 向代码仓库提问，查清与本议题相关的入口文件、命令与数据存储位置（可用的仓库与模型见该工具的说明）。
     2. 需要时用 pm_read_issue 查阅 PM 仓库里的议题。
-    3. 调用 pm_draft 提交决策表。每行 id 写成 "{{.Agenda}}-<两位序号>"，从 01 起；what、where（带文件路径）、how、tradeoff 写清楚；category 取以下之一：{{range $i, $c := .Categories}}{{if $i}}、{{end}}{{$c}}{{end}}；missingDesign 表示设计书是否缺这部分；deliver 写要在哪个仓库建实现 issue（repo、title、body），不需要时为 null。supersedes 只有人类议题才填，普通议题为 []；withdrawn 为 null。
+    3. 调用 pm_draft 提交决策表。每行 id 写成 "{{.Agenda}}-<两位序号>"，从 01 起；what、where（带文件路径）、how、tradeoff 写清楚；category 取以下之一：{{range $i, $c := .Categories}}{{if $i}}、{{end}}{{$c}}{{end}}；missingDesign 表示设计书是否缺这部分。行有实现 issue 时给 deliver（repo、title、body，去首尾空白后都不能为空）；行只要设计结论、不建实现 issue 时，整行不要 deliver 字段（连键都不传，不要传 null 或空串）。无交付行的一行完整示例：{"id":"{{.Agenda}}-01","what":"决策:列出X的W","where":"Y.md","how":"读到W后给出结论","tradeoff":"无","category":"意图","missingDesign":false}（无 deliver 键，一次通过）。supersedes 只有人类议题才填，普通议题为 []；withdrawn 为 null。
 
     pm_draft 成功即结束本任务。
   continue: 你还没有成功调用 pm_draft。按开场消息的要求完成决策表，调用 pm_draft 结束本任务；若工具返回错误，按错误修正后重试。
@@ -66,7 +66,7 @@ revise:
     {{end}}
     步骤：
     1. 逐条核实反例；需要时用 pm_proxy_read 查代码或设计书，用 pm_read_issue 查阅议题。
-    2. 调用 pm_draft 交出修订后的决策表：回应每条反例，修改或删去相应的行；原有行沿用原 id，新增行接着编号；category 取以下之一：{{range $i, $c := .Categories}}{{if $i}}、{{end}}{{$c}}{{end}}；其余字段的要求与起草时相同；withdrawn 为 null。
+    2. 调用 pm_draft 交出修订后的决策表：回应每条反例，修改或删去相应的行；原有行沿用原 id，新增行接着编号；category 取以下之一：{{range $i, $c := .Categories}}{{if $i}}、{{end}}{{$c}}{{end}}；其余字段的要求与起草时相同（行有实现 issue 时给 deliver，repo、title、body 去首尾空白后都不能为空；行只要设计结论时整行不要 deliver 字段，连键都不传）；withdrawn 为 null。
     3. 若反例表明这个议题不应再做，改为撤回：rows 照抄当前决策表，withdrawn 写撤回理由。
 
     pm_draft 成功即结束本任务。
