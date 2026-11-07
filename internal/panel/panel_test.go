@@ -1,13 +1,14 @@
 package panel
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/oh-my-omp/pm-council/internal/markers"
+	"github.com/oh-my-omp/pm-council/internal/sessions"
 	"github.com/oh-my-omp/pm-council/internal/tally"
 )
 
@@ -27,7 +28,7 @@ func TestEndMarker(t *testing.T) {
 			markers.Panel{Event: markers.PanelInterrupted, Round: 2, Sessions: []markers.PanelSession{}}, true},
 		{"failed carries the error and no sessions", nil, killed,
 			markers.Panel{Event: markers.PanelFailed, Round: 2, Sessions: []markers.PanelSession{}, Error: &reason}, true},
-		{"daemon stopping posts nothing", context.Canceled, killed, markers.Panel{}, false},
+		{"daemon stopping posts nothing", sessions.Shutdown(time.Now()), killed, markers.Panel{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, post := endMarker(tc.cause, errors.New(reason), 2, tc.open)

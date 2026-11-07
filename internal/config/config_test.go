@@ -118,6 +118,7 @@ func TestLoadErrors(t *testing.T) {
 		{"missing prompt file", "council/seats.yaml", "prompt: omp/prompts/Argon.md", "prompt: omp/prompts/Nobody.md", "council/seats.yaml: seats[2].prompt: stat"},
 		{"two drafters", "council/seats.yaml", "rights: [vote]\n", "rights: [vote, draft]\n", "council/seats.yaml: seats: exactly one seat must have the draft right, 2 have"},
 		{"zero interval", "council/runtime.yaml", "rebuildIntervalSeconds: 60", "rebuildIntervalSeconds: 0", "council/runtime.yaml: daemon.rebuildIntervalSeconds"},
+		{"zero shutdown timeout", "council/runtime.yaml", "shutdownTimeoutSeconds: 15", "shutdownTimeoutSeconds: 0", "council/runtime.yaml: daemon.shutdownTimeoutSeconds"},
 		{"missing resume", "council/council.yaml", "resume: fork\n", "", "council/council.yaml: resume: missing"},
 		{"bad resume", "council/council.yaml", "resume: fork", "resume: restart", `council/council.yaml: resume: "restart" is not one of fork, fresh`},
 		{"foreign goal tool", "council/goals.yaml", "goalTools: [pm_vote]", "goalTools: [pm_draft]", `council/goals.yaml: vote.goalTools[0]: "pm_draft" is not a vote goal tool`},

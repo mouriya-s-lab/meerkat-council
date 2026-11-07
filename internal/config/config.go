@@ -89,11 +89,17 @@ type App struct {
 type Daemon struct {
 	Listen                 string `yaml:"listen"`
 	RebuildIntervalSeconds int    `yaml:"rebuildIntervalSeconds"`
+	ShutdownTimeoutSeconds int    `yaml:"shutdownTimeoutSeconds"`
 }
 
 // RebuildInterval is the period of the daemon's full queue rebuild.
 func (d Daemon) RebuildInterval() time.Duration {
 	return time.Duration(d.RebuildIntervalSeconds) * time.Second
+}
+
+// ShutdownTimeout bounds how long a daemon stop waits for its panels to end after cancelling them.
+func (d Daemon) ShutdownTimeout() time.Duration {
+	return time.Duration(d.ShutdownTimeoutSeconds) * time.Second
 }
 
 type OMP struct {
@@ -604,6 +610,7 @@ func load(root string, fsys fs.FS) (*Config, error) {
 		f.url("app.daemonURL", r.App.DaemonURL)
 		f.str("daemon.listen", r.Daemon.Listen)
 		f.positive("daemon.rebuildIntervalSeconds", r.Daemon.RebuildIntervalSeconds)
+		f.positive("daemon.shutdownTimeoutSeconds", r.Daemon.ShutdownTimeoutSeconds)
 		f.str("sessionsDir", r.SessionsDir)
 		f.str("checkoutDir", r.CheckoutDir)
 		f.url("guardiansURL", r.GuardiansURL)

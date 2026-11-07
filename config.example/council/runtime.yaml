@@ -5,6 +5,9 @@ app:
 daemon:
   listen: 127.0.0.1:7421
   rebuildIntervalSeconds: 60
+  # On a daemon stop, panels are cancelled and the daemon waits this long for them before exiting; the
+  # HTTP server takes up to 5 more seconds. The deployment's stop timeout must exceed the sum.
+  shutdownTimeoutSeconds: 15
 sessionsDir: /Users/mouriya/Ext/work/pm-council-local/sessions
 checkoutDir: /Users/mouriya/Ext/work/pm-council-local/checkouts
 guardiansURL: http://127.0.0.1:7410

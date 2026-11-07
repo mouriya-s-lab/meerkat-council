@@ -113,6 +113,7 @@ Sessions: rows come from the omp session files under `sessionsDir` (header `sess
 | `app.daemonURL` | daemon base URL the app forwards events to |
 | `daemon.listen` | daemon HTTP listen address |
 | `daemon.rebuildIntervalSeconds` | seconds between full rebuilds |
+| `daemon.shutdownTimeoutSeconds` | seconds a daemon stop waits for its panels to end after cancelling them; a session a stop kills records the stop and its time. The HTTP server takes up to 5 s more, so the deployment's stop timeout must exceed the sum |
 | `sessionsDir` | root of the council's omp session files |
 | `checkoutDir` | PM repository checkouts for panels |
 | `guardiansURL` | pm-guardians base URL |
