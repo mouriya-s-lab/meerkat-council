@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -302,6 +303,49 @@ func TestCandidates(t *testing.T) {
 				t.Errorf("Candidates = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestClosedIssues(t *testing.T) {
+	closed := func(is Issue) Issue { is.Closed = true; return is }
+	issues := []Issue{
+		issue(1, KindAgenda, StatusInProgress, "D1", panelEv(markers.PanelInterrupted, 1)),         // interrupted
+		closed(issue(2, KindAgenda, StatusTodo, "D2")),                                             // ready, closed
+		closed(issue(3, KindAgenda, StatusInProgress, "D3", panelEv(markers.PanelFailed, 1))),      // failed, closed
+		closed(issue(4, KindAgenda, StatusInProgress, "D4", panelEv(markers.PanelInterrupted, 1))), // interrupted, closed
+		closed(issue(5, KindHuman, StatusInProgress, "D5", panelEv(markers.PanelStarted, 1))),      // undecided human, closed
+	}
+	q := Build(Snapshot{AgendaPrefix: "D", Issues: issues})
+	if HumanPending(q) {
+		t.Errorf("a closed undecided human issue holds the agenda")
+	}
+	states := map[Ref]string{}
+	for _, e := range q {
+		states[e.Ref] = fmt.Sprintf("%s closed=%t", e.State, e.Closed)
+	}
+	want := map[Ref]string{
+		ref(1): "interrupted closed=false", ref(2): "ready closed=true", ref(3): "failed closed=true",
+		ref(4): "interrupted closed=true", ref(5): "deliberating closed=true",
+	}
+	if !reflect.DeepEqual(states, want) {
+		t.Errorf("states = %v, want %v", states, want)
+	}
+	if got := Candidates(q, nil, time.Now()); !reflect.DeepEqual(got, []Candidate{{ref(1), StartResume}}) {
+		t.Errorf("Candidates = %v", got)
+	}
+	for _, tc := range []struct {
+		is   Issue
+		left bool
+	}{
+		{issue(1, KindAgenda, StatusInProgress, "D1"), false},
+		{issue(1, KindAgenda, StatusNone, ""), false},
+		{closed(issue(1, KindAgenda, StatusInProgress, "D1")), true},
+		{issue(1, KindAgenda, StatusDone, "D1"), true},
+		{issue(1, KindHuman, StatusSuperseded, "D1"), true},
+	} {
+		if got := tc.is.LeftDeliberation(); got != tc.left {
+			t.Errorf("LeftDeliberation(%+v) = %t", tc.is, got)
+		}
 	}
 }
 

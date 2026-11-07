@@ -297,3 +297,71 @@ func TestFailedResumesOnlyFromAnEarlierProcess(t *testing.T) {
 		t.Fatalf("live = %v", d.live)
 	}
 }
+
+func TestScheduleStopsPanelsOfIssuesThatLeftDeliberation(t *testing.T) {
+	gh := &fakeGitHub{items: []github.Item{
+		{ID: "i1", Repo: "o/pm", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
+		{ID: "i2", Repo: "o/pm", Number: 2, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D2", "Status": "Todo"}},
+		{ID: "i3", Repo: "o/pm", Number: 3, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D3", "Status": "Todo"}},
+	}}
+	cfg := testConfig()
+	cfg.Council.MaxConcurrentPanels = 2
+	fp := &fakePanels{started: make(chan panel.Job, 8), ended: make(chan error, 8)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := New(ctx, cfg, gh, project, fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.schedule(ctx, d.started)
+	for range 2 {
+		<-fp.started
+	}
+	step := func(n int, resumeBefore time.Time) {
+		t.Helper()
+		if err := d.refresh(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+		d.admitAndPublish(ctx)
+		d.schedule(ctx, resumeBefore)
+	}
+	stoppedBecause := func(want error) {
+		t.Helper()
+		if cause := <-fp.ended; !errors.Is(cause, want) {
+			t.Fatalf("cause = %v, want %v", cause, want)
+		}
+	}
+
+	// Closing #1 stops its panel and frees the slot for #3.
+	gh.items[0].Closed = true
+	step(1, time.Time{})
+	stoppedBecause(panel.ErrLeftDeliberation)
+	if j := <-fp.started; j.Ref != "o/pm#3" {
+		t.Fatalf("started %v", j.Ref)
+	}
+
+	// Setting #2 to Done stops its panel; a full rebuild convenes neither #1 nor #2 again.
+	gh.items[1].Fields["Status"] = "Done"
+	step(2, d.started)
+	stoppedBecause(panel.ErrLeftDeliberation)
+	if len(d.live) != 1 || d.live[3] == nil {
+		t.Fatalf("live = %v", d.live)
+	}
+
+	// A human issue interrupts #3; closing it undecided stops its panel and #3 is convened again.
+	gh.items = append(gh.items, github.Item{ID: "i4", Repo: "o/pm", Number: 4, Fields: map[string]string{"Kind": "Human", "Agenda": "D4", "Status": "Todo"}})
+	step(4, time.Time{})
+	stoppedBecause(panel.ErrInterrupted)
+	if j := <-fp.started; j.Ref != "o/pm#4" {
+		t.Fatalf("started %v", j.Ref)
+	}
+	gh.items[3].Closed = true
+	step(4, time.Time{})
+	stoppedBecause(panel.ErrLeftDeliberation)
+	if j := <-fp.started; j.Ref != "o/pm#3" {
+		t.Fatalf("started %v", j.Ref)
+	}
+	if len(d.live) != 1 || d.live[3] == nil {
+		t.Fatalf("live = %v", d.live)
+	}
+}

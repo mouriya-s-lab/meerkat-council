@@ -59,6 +59,7 @@ const (
 type Issue struct {
 	Ref    Ref
 	Number int
+	Closed bool
 	Kind   Kind
 	Status Status
 	// StatusName is the GitHub option name of Status; empty when unset.
@@ -71,6 +72,12 @@ type Issue struct {
 	// PanelAt is the creation time of the comment holding the latest pm:panel marker; zero
 	// without one.
 	PanelAt time.Time
+}
+
+// LeftDeliberation reports whether the issue can no longer be deliberated: it is closed, or its
+// Status is the done or superseded option. A live panel of such an issue is stopped.
+func (is Issue) LeftDeliberation() bool {
+	return is.Closed || is.Status == StatusDone || is.Status == StatusSuperseded
 }
 
 // Seat is what the queue needs to know about a council seat.
@@ -110,6 +117,9 @@ type Entry struct {
 	State     State    `json:"state"`
 	Notes     []string `json:"notes"`
 	Panel     *Panel   `json:"panel"`
+	// Closed is whether the issue is closed. A closed issue is never convened or resumed, and a
+	// closed human issue holds no agenda issue; its state is derived as for an open one.
+	Closed bool `json:"closed"`
 
 	human   bool
 	number  int // agenda number, 0 when absent or of another prefix
@@ -145,7 +155,7 @@ func Build(s Snapshot) Queue {
 	}
 	humanPending := false
 	for _, is := range s.Issues {
-		if is.Kind == KindHuman && !decided(is) {
+		if is.Kind == KindHuman && !decided(is) && !is.Closed {
 			humanPending = true
 		}
 	}
@@ -163,6 +173,7 @@ func Build(s Snapshot) Queue {
 			number:    AgendaNumber(s.AgendaPrefix, is.Agenda),
 			issue:     is.Number,
 			panelAt:   is.PanelAt,
+			Closed:    is.Closed,
 		}
 		if e.human {
 			e.Kind = kindHuman
@@ -300,9 +311,9 @@ func AgendaNumber(prefix, agenda string) int {
 // Human reports whether the entry is a human issue.
 func (e Entry) Human() bool { return e.human }
 
-// HumanPending reports whether some human issue on the queue is not decided.
+// HumanPending reports whether some open human issue on the queue is not decided.
 func HumanPending(q Queue) bool {
-	return slices.ContainsFunc(q, func(e Entry) bool { return e.human && e.State != StateDecided })
+	return slices.ContainsFunc(q, func(e Entry) bool { return e.human && !e.Closed && e.State != StateDecided })
 }
 
 // Start is how a panel is started for an issue.
@@ -329,17 +340,18 @@ type Candidate struct {
 	Start Start
 }
 
-// Candidates returns, in queue order, the issues without a live panel that a panel may be started
-// for: ready ones are convened; interrupted ones are resumed; failed ones, and deliberating ones
-// without a live panel, are resumed only when their latest pm:panel comment was created before
-// resumeBefore, so a panel that failed or was left in this daemon process is never restarted by
-// it; decided ones whose decision is not fully published are resumed on every full rebuild. The
-// daemon passes its start time on full rebuilds and the zero time, which resumes none of them, on
-// single-issue refreshes. Superseded, held and blocked issues are never candidates.
+// Candidates returns, in queue order, the open issues without a live panel that a panel may be
+// started for: ready ones are convened; interrupted ones are resumed; failed ones, and
+// deliberating ones without a live panel, are resumed only when their latest pm:panel comment was
+// created before resumeBefore, so a panel that failed or was left in this daemon process is never
+// restarted by it; decided ones whose decision is not fully published are resumed on every full
+// rebuild. The daemon passes its start time on full rebuilds and the zero time, which resumes none
+// of them, on single-issue refreshes. Closed, superseded, held and blocked issues are never
+// candidates.
 func Candidates(q Queue, live map[Ref]bool, resumeBefore time.Time) []Candidate {
 	var out []Candidate
 	for _, e := range q {
-		if live[e.Ref] {
+		if live[e.Ref] || e.Closed {
 			continue
 		}
 		switch e.State {
