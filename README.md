@@ -89,6 +89,7 @@ Queue fields: `agenda` and `status` are the Project field values (`null` when un
 |---|---|
 | `decided` | `Status` is the done option, or a `pm:decision` comment exists |
 | `superseded` | `Status` is the superseded option, or a `pm:superseded` comment exists |
+| `closed` | the issue is closed |
 | `blocked` | an open human prerequisite is not decided |
 | `held` | the issue is not human and some open human issue is not decided |
 | `deliberating` | the latest `pm:panel` event is `started` or `resumed` |

@@ -104,6 +104,7 @@ type State string
 const (
 	StateDecided      State = "decided"
 	StateSuperseded   State = "superseded"
+	StateClosed       State = "closed"
 	StateBlocked      State = "blocked"
 	StateHeld         State = "held"
 	StateDeliberating State = "deliberating"
@@ -124,7 +125,7 @@ type Entry struct {
 	Panel     *Panel   `json:"panel"`
 	// Closed is whether the issue is closed. A closed issue is never convened or resumed, except a
 	// decided one whose publish is unfinished, and a closed human issue neither holds nor blocks
-	// another issue; its own state is derived as for an open one.
+	// another issue; a closed issue that is neither decided nor superseded is closed.
 	Closed bool `json:"closed"`
 
 	human   bool
@@ -218,6 +219,8 @@ func state(is Issue, waiting, humanPending bool) State {
 		return StateDecided
 	case superseded(is):
 		return StateSuperseded
+	case is.Closed:
+		return StateClosed
 	case waiting:
 		return StateBlocked
 	case is.Kind != KindHuman && humanPending:
@@ -354,8 +357,8 @@ type Candidate struct {
 // it; decided ones whose decision is not fully published are resumed on every full rebuild. The
 // daemon passes its start time on full rebuilds and the zero time, which resumes none of them, on
 // single-issue refreshes. Closed issues are never candidates except a decided one whose publish is
-// unfinished: the publish closes the issue before its last write, Status=Done. Superseded, held
-// and blocked issues are never candidates.
+// unfinished: the publish closes the issue before its last write, Status=Done. Superseded, closed,
+// held and blocked issues are never candidates.
 func Candidates(q Queue, live map[Ref]bool, resumeBefore time.Time) []Candidate {
 	var out []Candidate
 	for _, e := range q {
@@ -375,7 +378,7 @@ func Candidates(q Queue, live map[Ref]bool, resumeBefore time.Time) []Candidate 
 			if e.unpublished && !resumeBefore.IsZero() {
 				out = append(out, Candidate{e.Ref, StartResume})
 			}
-		case StateSuperseded, StateBlocked, StateHeld:
+		case StateSuperseded, StateClosed, StateBlocked, StateHeld:
 		default:
 			panic(fmt.Sprintf("unhandled queue state %q", e.State))
 		}
