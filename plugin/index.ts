@@ -181,6 +181,9 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 	const categories = ctx.categories.join(", ");
 	if (kind === "draft" || kind === "revise") {
 		const deliver = z.object({ repo: z.string(), title: z.string(), body: z.string() });
+		// One wording for the rule, shared by the schema description (which omp's validation error
+		// quotes as "withdrawn must be <description>") and the execute-time check.
+		const draftWithdrawn = "null: only a revise session may withdraw the agenda";
 		const row = z.object({
 			id: z.string().describe("Row id <agenda>-<two-digit sequence>, e.g. D3-01"),
 			what: z.string(),
@@ -204,18 +207,23 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 				settle: z
 					.object({ kind: z.enum(["reply", "replace"]), text: z.string() })
 					.nullable()
+					.optional()
 					.describe("How the escalated ask is settled; null when the issue was not raised from an ask"),
 				withdrawn: z
 					.string()
 					.nullable()
-					.describe(kind === "revise" ? "Reason the agenda is withdrawn, or null" : "Must be null: only a revision may withdraw the agenda"),
+					.optional()
+					.describe(kind === "revise" ? "Reason the agenda is withdrawn, or null" : draftWithdrawn),
 			}),
 			loadMode: "essential",
 			approval: "read",
 			async execute(_id, params) {
-				if (kind === "draft" && params.withdrawn !== null) throw new Error("withdrawn must be null: only a revise session may withdraw the agenda");
-				if (params.withdrawn !== null && params.withdrawn.trim() === "") throw new Error("withdrawn is an empty reason; give the reason or null");
-				if (params.rows.length === 0 && params.withdrawn === null) throw new Error("rows is empty and withdrawn is null");
+				// An omitted settle or withdrawn is null, as an omitted deliver is no delivery.
+				const settle = params.settle ?? null;
+				const withdrawn = params.withdrawn ?? null;
+				if (kind === "draft" && withdrawn !== null) throw new Error(`withdrawn must be ${draftWithdrawn}`);
+				if (withdrawn !== null && withdrawn.trim() === "") throw new Error("withdrawn is an empty reason; give the reason or null");
+				if (params.rows.length === 0 && withdrawn === null) throw new Error("rows is empty and withdrawn is null");
 				const ids = new Set<string>();
 				const code: DeliverCheck = { repos: ctx.repos.code };
 				for (const [i, r] of params.rows.entries()) {
@@ -230,7 +238,7 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 						if (notAllowed !== null) throw new Error(notAllowed);
 					}
 				}
-				if (ctx.escalation && params.settle === null) {
+				if (ctx.escalation && settle === null) {
 					throw new Error(`settle required: ${ctx.escalation.issue} ask ${ctx.escalation.ask}`);
 				}
 				return recorded("pm_draft");
