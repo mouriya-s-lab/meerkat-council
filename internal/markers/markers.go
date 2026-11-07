@@ -28,9 +28,13 @@ const (
 	KindDecision   Kind = "decision"
 	KindSuperseded Kind = "superseded"
 	KindEscalation Kind = "escalation"
+	KindReply      Kind = "reply"
+	KindReplaced   Kind = "replaced"
+	KindReplaces   Kind = "replaces"
 )
 
-// Marker is one of Panel, Draft, Vote, Ruling, Decision, Superseded, Escalation.
+// Marker is one of Panel, Draft, Vote, Ruling, Decision, Superseded, Escalation (agenda issues)
+// or Reply, Replaced, Replaces (implementation issues, contract §2).
 type Marker interface {
 	Kind() Kind
 	validate() error
@@ -174,6 +178,25 @@ type Escalation struct {
 	Ask   int64  `json:"ask"`
 }
 
+// Reply settles an ask on an implementation issue; Decision is the agenda issue when the council
+// decided it.
+type Reply struct {
+	Ask      int64   `json:"ask"`
+	Decision *string `json:"decision"`
+}
+
+// Replaced marks an implementation issue replaced by another, settling Ask when not nil.
+type Replaced struct {
+	Ask *int64 `json:"ask"`
+	By  string `json:"by"`
+}
+
+// Replaces ends the body of an implementation issue that replaces Old.
+type Replaces struct {
+	Old string `json:"old"`
+	Ask *int64 `json:"ask"`
+}
+
 func (Panel) Kind() Kind      { return KindPanel }
 func (Draft) Kind() Kind      { return KindDraft }
 func (Vote) Kind() Kind       { return KindVote }
@@ -181,6 +204,9 @@ func (Ruling) Kind() Kind     { return KindRuling }
 func (Decision) Kind() Kind   { return KindDecision }
 func (Superseded) Kind() Kind { return KindSuperseded }
 func (Escalation) Kind() Kind { return KindEscalation }
+func (Reply) Kind() Kind      { return KindReply }
+func (Replaced) Kind() Kind   { return KindReplaced }
+func (Replaces) Kind() Kind   { return KindReplaces }
 
 func (p Panel) validate() error {
 	switch p.Event {
@@ -227,6 +253,9 @@ func (d Decision) validate() error {
 
 func (Superseded) validate() error { return nil }
 func (Escalation) validate() error { return nil }
+func (Reply) validate() error      { return nil }
+func (Replaced) validate() error   { return nil }
+func (Replaces) validate() error   { return nil }
 
 var linePattern = regexp.MustCompile(`^<!-- pm:([a-z]+) (\{.*\}) -->$`)
 
@@ -260,6 +289,12 @@ func Parse(body string) (Marker, error) {
 		mk = &Superseded{}
 	case KindEscalation:
 		mk = &Escalation{}
+	case KindReply:
+		mk = &Reply{}
+	case KindReplaced:
+		mk = &Replaced{}
+	case KindReplaces:
+		mk = &Replaces{}
 	default:
 		return nil, fmt.Errorf("pm:%s: not a council marker kind", kind)
 	}
@@ -402,4 +437,14 @@ func LastPanel(ms []Marker) (Panel, bool) {
 		}
 	}
 	return Panel{}, false
+}
+
+// LastDecision returns the latest pm:decision marker of ms.
+func LastDecision(ms []Marker) (Decision, bool) {
+	for i := len(ms) - 1; i >= 0; i-- {
+		if d, ok := ms[i].(Decision); ok {
+			return d, true
+		}
+	}
+	return Decision{}, false
 }

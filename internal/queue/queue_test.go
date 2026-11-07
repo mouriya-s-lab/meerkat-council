@@ -239,6 +239,7 @@ func TestOrder(t *testing.T) {
 
 func TestCandidates(t *testing.T) {
 	superseded := markers.Superseded{By: string(ref(9))}
+	decision := markers.Decision{Version: 1, Rows: []markers.DecisionRow{}, Impl: []string{}, Superseded: []string{}}
 	issues := []Issue{
 		issue(1, KindAgenda, StatusTodo, "D1"),                                             // ready
 		issue(2, KindAgenda, StatusInProgress, "D2", panelEv(markers.PanelStarted, 1)),     // deliberating
@@ -276,6 +277,14 @@ func TestCandidates(t *testing.T) {
 			issue(12, KindHuman, StatusInProgress, "D12", panelEv(markers.PanelInterrupted, 1)),
 			issue(13, KindAgenda, StatusTodo, "D1"),
 		}, nil, false, []Candidate{c{ref(12), StartResume}}},
+		{"a decision not yet Done is published again on a full rebuild only", []Issue{
+			issue(14, KindAgenda, StatusInProgress, "D14", panelEv(markers.PanelStarted, 1), decision),
+			issue(15, KindAgenda, StatusDone, "D15", panelEv(markers.PanelStarted, 1), decision),
+			issue(16, KindHuman, StatusInProgress, "D16", panelEv(markers.PanelStarted, 1), decision),
+		}, nil, true, []Candidate{c{ref(16), StartResume}, c{ref(14), StartResume}}},
+		{"no publish on an event", []Issue{
+			issue(14, KindAgenda, StatusInProgress, "D14", panelEv(markers.PanelStarted, 1), decision),
+		}, nil, false, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := Candidates(Build(Snapshot{AgendaPrefix: "D", Issues: tc.issues}), tc.live, tc.full)

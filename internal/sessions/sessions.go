@@ -313,8 +313,7 @@ func (r *Registry) List(dir string, goals config.Goals, limit int) ([]Summary, e
 				s.Ref = new(m.Ref)
 				label = append(label, m.Ref)
 			}
-			switch m.Kind {
-			case config.KindDraft, config.KindVote:
+			if slices.Contains(config.SessionKinds, m.Kind) {
 				goalTools = goals.Of(m.Kind).GoalTools
 			}
 		}

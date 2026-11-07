@@ -1,3 +1,35 @@
 agenda: { prefix: D, first: 1 }
 maxConcurrentPanels: 2
 resume: fork
+implIssue:
+  title: "{{.Row.Deliver.Title}}"
+  body: |
+    依据决策：{{.Ref}}（议程 {{.Agenda}}，第 {{.Row.ID}} 行）
+    {{- if .Replaces}}
+    取代：{{.Replaces.Old}}（询问 {{.Replaces.Ask}}）
+    {{- end}}
+
+    ## 要做什么与验收
+
+    {{.Row.Deliver.Body}}
+
+    ## 决策行
+
+    - what：{{.Row.What}}
+    - where：{{.Row.Where}}
+    - how：{{.Row.How}}
+
+    ## 启动
+
+    {{if .Link}}[用 dispatch 启动]({{.Link}}){{else}}（启动链接在建 issue 后写入）{{end}}
+launchLink:
+  base: http://127.0.0.1:47591
+  frontend: { kind: tern }
+reply:
+  body: |
+    议题 {{.Ref}}（议程 {{.Agenda}}）已定案。
+
+    {{.Text}}
+
+    {{.Table}}
+archive: null

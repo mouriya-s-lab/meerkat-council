@@ -1,0 +1,7 @@
+threshold: { numerator: 3, denominator: 4 }
+veto:
+  seats: [Argon]
+  categories: [意图]
+arbitration: { seat: LeadMentor }
+maxRounds: 2
+categories: [意图, 技术]
