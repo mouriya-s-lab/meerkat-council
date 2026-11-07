@@ -94,6 +94,7 @@ func TestAdmission(t *testing.T) {
 			{ID: "i3", Repo: "o/pm", Number: 3, Fields: map[string]string{}}, // no Kind: not admitted
 			{ID: "i5", Repo: "o/pm", Number: 5, Fields: map[string]string{"Kind": "Implementation"}},
 			{ID: "x9", Repo: "o/other", Number: 9, Fields: map[string]string{"Kind": "Agenda"}},
+			{ID: "i6", Repo: "o/pm", Number: 6, Fields: map[string]string{"Kind": "Agenda", "Status": "Done"}}, // closed before admission
 		},
 		blockers: map[int][]github.IssueRef{4: {{Repo: "o/pm", Number: 1}}},
 	}
@@ -104,6 +105,7 @@ func TestAdmission(t *testing.T) {
 	want := []write{
 		{"i2", "S", "todo-id"}, {"i2", "AG", "D4"},
 		{"i4", "S", "todo-id"}, {"i4", "AG", "D5"},
+		{"i6", "AG", "D6"},
 	}
 	if !reflect.DeepEqual(gh.writes, want) {
 		t.Fatalf("writes = %v, want %v", gh.writes, want)
@@ -113,7 +115,7 @@ func TestAdmission(t *testing.T) {
 	for _, e := range q {
 		got[e.Ref] = *e.Agenda + " " + *e.Status + " " + string(e.State)
 	}
-	wantQ := map[queue.Ref]string{"o/pm#1": "D3 Done decided", "o/pm#2": "D4 Todo held", "o/pm#4": "D5 Todo ready"}
+	wantQ := map[queue.Ref]string{"o/pm#1": "D3 Done decided", "o/pm#2": "D4 Todo held", "o/pm#4": "D5 Todo ready", "o/pm#6": "D6 Done decided"}
 	if !reflect.DeepEqual(got, wantQ) {
 		t.Fatalf("queue = %v, want %v", got, wantQ)
 	}
@@ -124,6 +126,7 @@ func TestAdmission(t *testing.T) {
 	// A second rebuild of the now-admitted items writes nothing.
 	gh.items[1].Fields = map[string]string{"Kind": "Human", "Agenda": "D5", "Status": "Todo"}
 	gh.items[2].Fields = map[string]string{"Kind": "Agenda", "Agenda": "D4", "Status": "Todo"}
+	gh.items[6].Fields = map[string]string{"Kind": "Agenda", "Agenda": "D6", "Status": "Done"}
 	gh.writes = nil
 	if err := d.rebuild(context.Background()); err != nil {
 		t.Fatal(err)
@@ -139,7 +142,7 @@ func TestAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.admitAndPublish(context.Background())
-	if len(d.Queue()) != 2 {
+	if len(d.Queue()) != 3 {
 		t.Fatalf("queue after refresh = %v", d.Queue())
 	}
 }
