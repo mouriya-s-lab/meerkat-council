@@ -1,5 +1,5 @@
 // Package api serves the daemon's HTTP API: contract §4 (health, sessions), §C (queue), the event
-// endpoint the council GitHub App forwards issue events to, and the configuration report and check.
+// endpoint the council webhook entry point forwards issue events to, and the configuration report and check.
 package api
 
 import (
@@ -19,7 +19,7 @@ import (
 	"github.com/oh-my-omp/pm-council/internal/sessions"
 )
 
-// Event is what the App forwards: the issue ("owner/repo#n"), the GitHub event and its action.
+// Event is what the webhook entry point forwards: the issue ("owner/repo#n"), the GitHub event and its action.
 type Event struct {
 	Issue  string `json:"issue"`
 	Event  string `json:"event"`

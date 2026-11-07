@@ -1,4 +1,4 @@
-// Package app is the council GitHub App endpoint: it verifies webhook deliveries and wakes the
+// Package app is the council webhook entry point: it verifies webhook deliveries and wakes the
 // daemon with the issue they concern. It keeps no state.
 package app
 

@@ -1,6 +1,6 @@
 // Command pm-council runs the Pepgent PM council.
 //
-//	pm-council app    --config-root <dir>   GitHub App webhook endpoint; wakes the daemon
+//	pm-council app    --config-root <dir>   repository webhook endpoint; wakes the daemon
 //	pm-council daemon --config-root <dir>   agenda queue rebuilt from GitHub; panels; HTTP API
 package main
 
