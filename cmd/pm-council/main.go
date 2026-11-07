@@ -105,7 +105,8 @@ func runDaemon(ctx context.Context, root string) error {
 	if err != nil {
 		return err
 	}
-	// The worker owns the panels; stopping it kills their sessions. Wait for that before exiting.
+	// Run stops the panels when ctx ends, cancelling them with a shutdown cause, and returns once they
+	// have ended or daemon.shutdownTimeoutSeconds has passed; wait for it before exiting.
 	ctx, cancel := context.WithCancel(ctx)
 	ran := make(chan struct{})
 	go func() {

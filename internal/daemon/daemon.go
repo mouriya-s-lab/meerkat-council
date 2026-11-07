@@ -20,6 +20,7 @@ import (
 	"github.com/oh-my-omp/pm-council/internal/markers"
 	"github.com/oh-my-omp/pm-council/internal/panel"
 	"github.com/oh-my-omp/pm-council/internal/queue"
+	"github.com/oh-my-omp/pm-council/internal/sessions"
 )
 
 // GitHub is the part of the GitHub client the daemon uses.
@@ -101,19 +102,19 @@ func (d *Daemon) Notify(ctx context.Context, number int) error {
 	}
 }
 
-// Run serves events, panel completions and periodic full rebuilds until ctx ends, then waits for
-// every live panel to end. The startup rebuild done by New counts as a full rebuild. Full rebuilds
+// Run serves events, panel completions and periodic full rebuilds until ctx ends; then it stops the
+// live panels (see shutdown). The startup rebuild done by New counts as a full rebuild. Full rebuilds
 // resume failed and orphaned panels whose latest pm:panel predates the process start; refreshes
 // resume none of them.
 func (d *Daemon) Run(ctx context.Context) {
 	tick := time.NewTicker(d.cfg.Runtime.Daemon.RebuildInterval())
 	defer tick.Stop()
-	defer d.waitPanels()
 	d.schedule(ctx, d.started)
 	for {
 		var resumeBefore time.Time
 		select {
 		case <-ctx.Done():
+			d.shutdown()
 			return
 		case <-tick.C:
 			if err := d.rebuild(ctx); err != nil {
@@ -142,10 +143,28 @@ func (d *Daemon) Run(ctx context.Context) {
 	}
 }
 
-// waitPanels waits for every live panel; their contexts end with the daemon's.
-func (d *Daemon) waitPanels() {
+// shutdown stops the live panels: each is cancelled with a sessions.Shutdown cause stamped with the
+// time of the stop, which the panel's sessions record as their end. It waits for the panels to end
+// for at most daemon.shutdownTimeoutSeconds; a panel still running then is left behind and the
+// daemon exits without it.
+func (d *Daemon) shutdown() {
+	at := time.Now().UTC()
 	for _, lp := range d.live {
-		<-lp.done
+		lp.cancel(sessions.Shutdown(at))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), d.cfg.Runtime.Daemon.ShutdownTimeout())
+	defer cancel()
+	for _, lp := range d.live {
+		select {
+		case <-lp.done:
+			continue
+		case <-ctx.Done():
+		}
+		select {
+		case <-lp.done:
+		default:
+			slog.Error("panel still running at shutdown timeout; exiting without it", "issue", lp.ref)
+		}
 	}
 }
 
@@ -222,7 +241,8 @@ func (d *Daemon) schedule(ctx context.Context, resumeBefore time.Time) {
 }
 
 func (d *Daemon) start(ctx context.Context, r record, start queue.Start, humans []panel.HumanIssue) {
-	pctx, cancel := context.WithCancelCause(ctx)
+	// A panel outlives ctx's cancel: shutdown cancels it with its own cause, so the stop is recorded.
+	pctx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
 	lp := &livePanel{number: r.issue.Number, ref: r.issue.Ref, human: r.issue.Kind == queue.KindHuman, cancel: cancel, done: make(chan struct{})}
 	d.live[lp.number] = lp
 	job := panel.Job{

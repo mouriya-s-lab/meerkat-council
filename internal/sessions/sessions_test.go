@@ -49,7 +49,7 @@ func TestList(t *testing.T) {
 		}
 	}
 	failedAt := time.Date(2026, 11, 6, 22, 0, 5, 5e6, time.UTC)
-	if err := writeFailure(filepath.Join(dir, "2", "failed.jsonl"), "omp exited", failedAt); err != nil {
+	if err := RecordFailure(filepath.Join(dir, "2", "failed.jsonl"), "omp exited", failedAt); err != nil {
 		t.Fatal(err)
 	}
 	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"pm_draft"}}, Vote: config.Goal{GoalTools: []string{"pm_vote"}}}
@@ -115,7 +115,7 @@ func TestListDerivesState(t *testing.T) {
 	}
 	failedFile := filepath.Join(dir, "2", "failed.jsonl")
 	failedAt := time.Date(2026, 11, 6, 22, 0, 5, 5e6, time.UTC)
-	if err := writeFailure(failedFile, "omp exited", failedAt); err != nil {
+	if err := RecordFailure(failedFile, "omp exited", failedAt); err != nil {
 		t.Fatal(err)
 	}
 	if b, err := os.ReadFile(FailurePath(failedFile)); err != nil || string(b) != `{"reason":"omp exited","at":"2026-11-06T22:00:05.005Z"}` {

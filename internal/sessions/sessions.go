@@ -63,8 +63,42 @@ func FailurePath(sessionFile string) string {
 	return strings.TrimSuffix(sessionFile, ".jsonl") + ".pm-failure.json"
 }
 
-// writeFailure records that the session in sessionFile failed at at for reason, atomically.
-func writeFailure(sessionFile, reason string, at time.Time) error {
+// ErrShutdown is the cancel cause of a daemon stop. Shutdown carries the time of the cancel.
+var ErrShutdown = errors.New("daemon shutdown")
+
+// shutdownReason is the failure a session killed by a daemon stop records.
+const shutdownReason = "守护进程关闭导致会话被终止"
+
+// shutdown is the cancel cause of a daemon stop decided at at.
+type shutdown struct{ at time.Time }
+
+func (s shutdown) Error() string { return ErrShutdown.Error() }
+
+func (s shutdown) Unwrap() error { return ErrShutdown }
+
+// Shutdown returns the cancel cause of a daemon stop decided at at.
+func Shutdown(at time.Time) error { return shutdown{at: at} }
+
+// ShutdownAt reports the cancel time of a daemon stop, when cause is one.
+func ShutdownAt(cause error) (time.Time, bool) {
+	var stop shutdown
+	if errors.As(cause, &stop) {
+		return stop.at, true
+	}
+	return time.Time{}, false
+}
+
+// failureOf is the failure a session whose run returned err records, given its ctx's cancel cause: a
+// daemon stop names the stop and its cancel time, anything else is err at now.
+func failureOf(err, cause error, now time.Time) (reason string, at time.Time) {
+	if at, ok := ShutdownAt(cause); ok {
+		return shutdownReason, at
+	}
+	return err.Error(), now
+}
+
+// RecordFailure records that the session in sessionFile failed at at for reason, atomically.
+func RecordFailure(sessionFile, reason string, at time.Time) error {
 	b, err := json.Marshal(failureRecord{Reason: reason, At: at})
 	if err != nil {
 		return err
@@ -290,7 +324,8 @@ func (r *Registry) Run(ctx context.Context, s Spec) (Result, error) {
 		},
 	})
 	if err != nil && sessionFile != "" {
-		if werr := writeFailure(sessionFile, err.Error(), time.Now().UTC()); werr != nil {
+		reason, at := failureOf(err, context.Cause(ctx), time.Now().UTC())
+		if werr := RecordFailure(sessionFile, reason, at); werr != nil {
 			slog.Error("record session failure", "session", sessionID, "err", werr)
 		}
 	}

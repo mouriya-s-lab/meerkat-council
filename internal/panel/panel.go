@@ -139,8 +139,8 @@ func Derive(ms []markers.Marker, voters []string) Step {
 }
 
 // Run runs the panel until its decision is published, it fails or ctx ends. A failure is posted
-// as pm:panel failed; cancellation with cause ErrInterrupted as pm:panel interrupted; any other
-// cancellation (the daemon stopping) posts nothing.
+// as pm:panel failed; cancellation with cause ErrInterrupted as pm:panel interrupted; a daemon stop
+// (cause sessions.ErrShutdown) posts nothing. The sessions it kills are recorded by sessions.Registry.
 func (r *Runner) Run(ctx context.Context, j Job) {
 	repo, n, ok := queue.ParseRef(string(j.Ref))
 	if !ok {
@@ -152,7 +152,8 @@ func (r *Runner) Run(ctx context.Context, j Job) {
 	if err == nil {
 		return
 	}
-	pm, post := endMarker(context.Cause(ctx), err, round, open)
+	cause := context.Cause(ctx)
+	pm, post := endMarker(cause, err, round, open)
 	if !post {
 		slog.Info("panel stopped with the daemon", "issue", j.Ref, "err", err)
 		return
@@ -183,7 +184,7 @@ func endMarker(cause, err error, round int, open []markers.PanelSession) (pm mar
 			open = []markers.PanelSession{}
 		}
 		return markers.Panel{Event: markers.PanelInterrupted, Round: round, Sessions: open}, true
-	case cause != nil:
+	case errors.Is(cause, sessions.ErrShutdown):
 		return markers.Panel{}, false
 	}
 	reason := err.Error()
