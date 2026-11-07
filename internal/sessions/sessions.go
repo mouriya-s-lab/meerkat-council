@@ -49,10 +49,19 @@ type File struct {
 	FailedAt      time.Time            // when the program decided it failed; zero for records without it
 }
 
-// failureRecord is the file at FailurePath. Records written before At existed lack it.
+// failureRecord is the file at FailurePath. Records written before the metadata existed carry
+// only reason and at; without an id they cannot name a session on their own.
 type failureRecord struct {
 	Reason string    `json:"reason"`
 	At     time.Time `json:"at,omitzero"` // RFC 3339
+	ID     string    `json:"id,omitzero"`
+	// Kind, Seat, Ref, Model and StartedAt are what Registry.Run knew from its Spec when the
+	// session failed. They let List name a session whose .jsonl omp never wrote.
+	Kind      config.SessionKind `json:"kind,omitzero"`
+	Seat      string             `json:"seat,omitzero"`
+	Ref       string             `json:"ref,omitzero"`
+	Model     string             `json:"model,omitzero"`
+	StartedAt time.Time          `json:"startedAt,omitzero"` // RFC 3339
 }
 
 // FailurePath is where the program records why and when its run of the session in the omp session
@@ -97,13 +106,18 @@ func failureOf(err, cause error, now time.Time) (reason string, at time.Time) {
 	return err.Error(), now
 }
 
-// RecordFailure records that the session in sessionFile failed at at for reason, atomically.
-func RecordFailure(sessionFile, reason string, at time.Time) error {
-	b, err := json.Marshal(failureRecord{Reason: reason, At: at})
+// RecordFailure writes rec for the session in sessionFile, atomically, creating the parent
+// directory when omp died before writing anything there. Records written before
+// the metadata fields existed still read: they carry only reason and at.
+func RecordFailure(sessionFile string, rec failureRecord) error {
+	b, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
 	path := FailurePath(sessionFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	if err := os.WriteFile(path+".tmp", b, 0o644); err != nil {
 		return err
 	}
@@ -200,14 +214,39 @@ func ParseFile(path string) (*File, error) {
 			return nil, fmt.Errorf("%s: %w", FailurePath(path), err)
 		}
 		f.Failure, f.FailedAt = rec.Reason, rec.At
+		if f.Meta == nil {
+			backfillMeta(f, rec)
+		}
 	}
 	return f, nil
 }
 
+// backfillMeta fills f.Meta from rec when the session file carries no pm-meta entry.
+// It reports whether the record named a session at all.
+func backfillMeta(f *File, rec failureRecord) bool {
+	if rec.ID == "" || rec.Kind == "" {
+		return false
+	}
+	f.Meta = &Meta{Kind: rec.Kind, Seat: rec.Seat, Model: rec.Model, Ref: rec.Ref}
+	if f.ID == "" {
+		f.ID = rec.ID
+	}
+	if f.StartedAt.IsZero() {
+		f.StartedAt = rec.StartedAt
+	}
+	if f.LastAt.IsZero() {
+		f.LastAt = rec.StartedAt
+	}
+	return true
+}
+
 // ScanDir parses every session file under dir (recursively); other .jsonl files are skipped.
-// A missing dir yields no files.
+// A failure record whose session file omp never wrote yields an entry of its own, so a
+// session killed before its first write still appears in the list. A missing dir yields no
+// files.
 func ScanDir(dir string) ([]*File, error) {
 	var files []*File
+	var orphans []string
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -215,20 +254,65 @@ func ScanDir(dir string) ([]*File, error) {
 			}
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+		if d.IsDir() {
 			return nil
 		}
-		f, err := ParseFile(path)
-		if errors.Is(err, ErrNotSession) || errors.Is(err, fs.ErrNotExist) {
-			return nil
+		switch {
+		case strings.HasSuffix(path, ".jsonl"):
+			f, err := ParseFile(path)
+			if errors.Is(err, ErrNotSession) || errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			files = append(files, f)
+		case strings.HasSuffix(path, ".pm-failure.json"):
+			orphans = append(orphans, path)
 		}
-		if err != nil {
-			return err
-		}
-		files = append(files, f)
 		return nil
 	})
-	return files, err
+	if err != nil {
+		return nil, err
+	}
+	for _, recPath := range orphans {
+		f, ok, err := orphanFile(recPath)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			files = append(files, f)
+		}
+	}
+	return files, nil
+}
+
+// orphanFile derives the session the failure record at recPath names when its session file
+// does not exist. It reports false when the record is old-format (no id) or the session
+// file exists after all; either way there is no extra entry.
+func orphanFile(recPath string) (*File, bool, error) {
+	sessionFile := strings.TrimSuffix(recPath, ".pm-failure.json") + ".jsonl"
+	if _, err := os.Stat(sessionFile); err == nil {
+		return nil, false, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, false, err
+	}
+	b, err := os.ReadFile(recPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	var rec failureRecord
+	if err := json.Unmarshal(b, &rec); err != nil {
+		return nil, false, fmt.Errorf("%s: %w", recPath, err)
+	}
+	f := &File{Path: sessionFile, ToolOK: map[string]time.Time{}, Failure: rec.Reason, FailedAt: rec.At}
+	if !backfillMeta(f, rec) {
+		return nil, false, nil
+	}
+	return f, true, nil
 }
 
 // Spec is one seat session to run until one of its goal tools succeeds.
@@ -270,8 +354,10 @@ func NewRegistry() *Registry {
 }
 
 // Run starts omp per s through omprpc.RunSession and records, while it runs, that the session is
-// live; if it fails after its file is known, the failure goes into the record beside that file.
+// live; if it fails after its file is known, the failure goes into the record beside that file,
+// with the session metadata from s so the session lists even when omp never wrote its file.
 func (r *Registry) Run(ctx context.Context, s Spec) (Result, error) {
+	started := time.Now().UTC()
 	if err := os.MkdirAll(s.SessionDir, 0o755); err != nil {
 		return Result{}, &Failure{Reason: err.Error()}
 	}
@@ -325,7 +411,15 @@ func (r *Registry) Run(ctx context.Context, s Spec) (Result, error) {
 	})
 	if err != nil && sessionFile != "" {
 		reason, at := failureOf(err, context.Cause(ctx), time.Now().UTC())
-		if werr := RecordFailure(sessionFile, reason, at); werr != nil {
+		rec := failureRecord{
+			Reason: reason, At: at,
+			ID: sessionID, Kind: s.Meta.Kind, Seat: s.Meta.Seat, Ref: s.Meta.Ref,
+			Model: s.Meta.Model, StartedAt: started,
+		}
+		if rec.Model == "" {
+			rec.Model = s.Model
+		}
+		if werr := RecordFailure(sessionFile, rec); werr != nil {
 			slog.Error("record session failure", "session", sessionID, "err", werr)
 		}
 	}
@@ -364,7 +458,8 @@ type Summary struct {
 }
 
 // List derives session rows from every session file under dir, newest first, at most limit rows.
-// A session is running while it is live in this process, done when one of its kind's goal tools
+// A session killed before omp wrote its file lists from its failure record alone. A session
+// is running while it is live in this process, done when one of its kind's goal tools
 // has a successful result, failed otherwise.
 func (r *Registry) List(dir string, goals config.Goals, limit int) ([]Summary, error) {
 	files, err := ScanDir(dir)
