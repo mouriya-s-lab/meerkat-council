@@ -1,7 +1,7 @@
 // Command pm-council runs the Pepgent PM council.
 //
 //	pm-council app    --config-root <dir>   GitHub App webhook endpoint; wakes the daemon
-//	pm-council daemon --config-root <dir>   agenda queue rebuilt from GitHub; HTTP API
+//	pm-council daemon --config-root <dir>   agenda queue rebuilt from GitHub; panels; HTTP API
 package main
 
 import (
@@ -22,6 +22,9 @@ import (
 	"github.com/oh-my-omp/pm-council/internal/config"
 	"github.com/oh-my-omp/pm-council/internal/daemon"
 	"github.com/oh-my-omp/pm-council/internal/github"
+	"github.com/oh-my-omp/pm-council/internal/panel"
+	"github.com/oh-my-omp/pm-council/internal/sessions"
+	"github.com/oh-my-omp/pm-council/internal/tally"
 )
 
 const usage = "usage: pm-council app|daemon --config-root <dir>"
@@ -96,12 +99,24 @@ func runDaemon(ctx context.Context, root string) error {
 	if err != nil {
 		return err
 	}
-	d, err := daemon.New(ctx, cfg, gh, project)
+	reg := sessions.NewRegistry()
+	runner := panel.New(cfg, gh, project, reg, tally.New(gh))
+	d, err := daemon.New(ctx, cfg, gh, project, runner)
 	if err != nil {
 		return err
 	}
-	go d.Run(ctx)
-	srv := api.New(d, cfg.Repos.PM.Repo, cfg.Runtime.SessionsDir, startedAt)
+	// The worker owns the panels; stopping it kills their sessions. Wait for that before exiting.
+	ctx, cancel := context.WithCancel(ctx)
+	ran := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(ran)
+	}()
+	defer func() {
+		cancel()
+		<-ran
+	}()
+	srv := api.New(d, reg, cfg.Goals, cfg.Repos.PM.Repo, cfg.Runtime.SessionsDir, startedAt)
 	slog.Info("daemon listening", "addr", cfg.Runtime.Daemon.Listen, "project", project.ID, "issues", len(d.Queue()))
 	return serve(ctx, cfg.Runtime.Daemon.Listen, srv.Handler())
 }

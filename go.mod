@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	github.com/cli/go-gh/v2 v2.17.0
 	github.com/goccy/go-yaml v1.19.2
+	github.com/oh-my-omp/pm-guardians v0.0.0-20261106230000-075e7bb9e6ce
 )
 
 require (

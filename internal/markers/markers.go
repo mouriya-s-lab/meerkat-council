@@ -362,3 +362,44 @@ func Format(m Marker) (string, error) {
 	}
 	return fmt.Sprintf(`<!-- pm:%s {"v":%d%s%s -->`, m.Kind(), Version, sep, b[1:]), nil
 }
+
+// Comment renders a comment body: text, a blank line, then m's marker line. It fails when the line
+// would not parse back as a marker (a missing field or unknown enum value).
+func Comment(text string, m Marker) (string, error) {
+	line, err := Format(m)
+	if err != nil {
+		return "", err
+	}
+	if _, err := Parse(line); err != nil {
+		return "", err
+	}
+	return strings.TrimRight(text, "\n") + "\n\n" + line, nil
+}
+
+// Collect parses the marker of each body, oldest first. Bodies without a marker are skipped;
+// malformed markers are skipped and returned as errors.
+func Collect(bodies []string) ([]Marker, []error) {
+	var ms []Marker
+	var errs []error
+	for _, b := range bodies {
+		m, err := Parse(b)
+		switch {
+		case errors.Is(err, ErrNoMarker):
+		case err != nil:
+			errs = append(errs, err)
+		default:
+			ms = append(ms, m)
+		}
+	}
+	return ms, errs
+}
+
+// LastPanel returns the latest pm:panel marker of ms.
+func LastPanel(ms []Marker) (Panel, bool) {
+	for i := len(ms) - 1; i >= 0; i-- {
+		if p, ok := ms[i].(Panel); ok {
+			return p, true
+		}
+	}
+	return Panel{}, false
+}

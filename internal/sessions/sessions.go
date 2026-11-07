@@ -1,37 +1,47 @@
-// Package sessions derives council session records from the omp session files under the
-// sessions directory (contract §4).
+// Package sessions runs council seat sessions and derives session records from the omp session
+// files under the sessions directory (contract §4).
 package sessions
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/oh-my-omp/pm-guardians/omprpc"
+
+	"github.com/oh-my-omp/pm-council/internal/config"
 )
 
 // Meta is the pm-meta custom entry the council plugin appends at session start.
 type Meta struct {
-	Kind  string `json:"kind"`
-	Seat  string `json:"seat,omitempty"`
-	Model string `json:"model"`
-	Ref   string `json:"ref,omitempty"`
+	Kind    config.SessionKind `json:"kind"`
+	Seat    string             `json:"seat"`
+	Model   string             `json:"model"`
+	Ref     string             `json:"ref"`
+	Round   int                `json:"round"`
+	Version int                `json:"version"`
 }
 
 // File is what the program derives from one omp session file. Entries timestamped before the
 // session header (history copied by a fork) count only for Meta.
 type File struct {
-	Path      string
-	ID        string
-	StartedAt time.Time
-	LastAt    time.Time
-	Meta      *Meta  // latest pm-meta entry
-	Exited    bool   // a session_exit entry was written
-	LastError string // errorMessage of the latest assistant message that failed
+	Path          string
+	ID            string
+	ParentSession string
+	StartedAt     time.Time
+	LastAt        time.Time
+	Meta          *Meta                // latest pm-meta entry
+	ToolOK        map[string]time.Time // tool name -> timestamp of its latest successful tool result
+	LastError     string               // errorMessage of the latest assistant message that failed
 }
 
 // ErrNotSession marks a .jsonl file that is not an omp session file (no session header).
@@ -40,13 +50,16 @@ var ErrNotSession = errors.New("not an omp session file")
 const maxLineBytes = 64 << 20
 
 type entry struct {
-	Type       string          `json:"type"`
-	ID         string          `json:"id"`
-	Timestamp  string          `json:"timestamp"`
-	CustomType string          `json:"customType"`
-	Data       json.RawMessage `json:"data"`
-	Message    *struct {
+	Type          string          `json:"type"`
+	ID            string          `json:"id"`
+	Timestamp     string          `json:"timestamp"`
+	ParentSession string          `json:"parentSession"`
+	CustomType    string          `json:"customType"`
+	Data          json.RawMessage `json:"data"`
+	Message       *struct {
 		Role         string `json:"role"`
+		ToolName     string `json:"toolName"`
+		IsError      bool   `json:"isError"`
 		ErrorMessage string `json:"errorMessage"`
 	} `json:"message"`
 }
@@ -60,7 +73,7 @@ func ParseFile(path string) (*File, error) {
 	defer fh.Close()
 	sc := bufio.NewScanner(fh)
 	sc.Buffer(make([]byte, 64<<10), maxLineBytes)
-	f := &File{Path: path}
+	f := &File{Path: path, ToolOK: map[string]time.Time{}}
 	for sc.Scan() {
 		var e entry
 		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
@@ -72,6 +85,7 @@ func ParseFile(path string) (*File, error) {
 				continue
 			case "session":
 				f.ID = e.ID
+				f.ParentSession = e.ParentSession
 				f.StartedAt = parseTime(e.Timestamp)
 				f.LastAt = f.StartedAt
 				continue
@@ -90,14 +104,18 @@ func ParseFile(path string) (*File, error) {
 			}
 			continue
 		}
-		if ts.Before(f.StartedAt) {
+		if e.Type != "message" || e.Message == nil || ts.Before(f.StartedAt) {
 			continue
 		}
-		switch {
-		case e.Type == "custom" && e.CustomType == "session_exit":
-			f.Exited = true
-		case e.Type == "message" && e.Message != nil && e.Message.Role == "assistant" && e.Message.ErrorMessage != "":
-			f.LastError = e.Message.ErrorMessage
+		switch e.Message.Role {
+		case "toolResult":
+			if !e.Message.IsError {
+				f.ToolOK[e.Message.ToolName] = ts
+			}
+		case "assistant":
+			if e.Message.ErrorMessage != "" {
+				f.LastError = e.Message.ErrorMessage
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -136,6 +154,113 @@ func ScanDir(dir string) ([]*File, error) {
 	return files, err
 }
 
+// Spec is one seat session to run until one of its goal tools succeeds.
+type Spec struct {
+	OMP                        config.OMP
+	Model, SystemPrompt, Tools string
+	SessionDir, Cwd            string
+	ForkFrom                   string // killed session file to fork; empty for a new session
+	GoalTools                  []string
+	Opening, Continue          string
+	Meta                       Meta
+	ContextFile                string // PM_CONTEXT
+	GuardiansURL               string // PM_GUARDIANS_URL
+	MaxContinuePrompts         int
+	// OnReady, if set, is called once the session id and file are known.
+	OnReady func(sessionID, sessionFile string)
+}
+
+// Result is a session whose goal tool succeeded: ToolName and Args are that call's.
+type Result struct {
+	SessionID, SessionFile, ToolName string
+	Args                             json.RawMessage
+}
+
+// Failure is a session that ended without a goal tool succeeding. Reason is omprpc's verbatim.
+type Failure struct{ Reason string }
+
+func (f *Failure) Error() string { return f.Reason }
+
+// Registry runs sessions and remembers, for this process lifetime, which are live and why failed
+// ones failed. Everything else about a session comes from its file.
+type Registry struct {
+	mu       sync.Mutex
+	live     map[string]bool
+	failures map[string]string
+}
+
+func NewRegistry() *Registry {
+	return &Registry{live: map[string]bool{}, failures: map[string]string{}}
+}
+
+// Run starts omp per s through omprpc.RunSession and records, while it runs, that the session is
+// live and, if it fails, why.
+func (r *Registry) Run(ctx context.Context, s Spec) (Result, error) {
+	if err := os.MkdirAll(s.SessionDir, 0o755); err != nil {
+		return Result{}, &Failure{Reason: err.Error()}
+	}
+	meta, err := json.Marshal(s.Meta)
+	if err != nil {
+		return Result{}, &Failure{Reason: err.Error()}
+	}
+	args := []string{
+		"--mode", "rpc",
+		"--session-dir", s.SessionDir,
+		"--model", s.Model,
+		"--system-prompt", s.SystemPrompt,
+		"--tools", s.Tools,
+		"--trusted-extension", s.OMP.Extension,
+		"--no-skills", "--no-rules", "--no-lsp",
+	}
+	if s.ForkFrom != "" {
+		args = append(args, "--fork", s.ForkFrom)
+	}
+	var sessionID string
+	res, err := omprpc.RunSession(ctx, omprpc.SessionSpec{
+		Options: omprpc.Options{
+			Bin:  s.OMP.Executable,
+			Args: args,
+			Dir:  s.Cwd,
+			Env: []string{
+				"PI_CODING_AGENT_DIR=" + s.OMP.AgentDir,
+				"PM_KIND=" + string(s.Meta.Kind),
+				"PM_GOAL_TOOLS=" + strings.Join(s.GoalTools, ","),
+				"PM_CONTINUE=" + s.Continue,
+				"PM_META=" + string(meta),
+				"PM_CONTEXT=" + s.ContextFile,
+				"PM_GUARDIANS_URL=" + s.GuardiansURL,
+			},
+		},
+		Opening:            s.Opening,
+		Continue:           s.Continue,
+		GoalTools:          s.GoalTools,
+		MaxContinuePrompts: s.MaxContinuePrompts,
+		ReadyTimeout:       s.OMP.ReadyTimeout(),
+		ExitGrace:          s.OMP.ExitGrace(),
+		OnReady: func(id, file string) {
+			sessionID = id
+			r.mu.Lock()
+			r.live[id] = true
+			r.mu.Unlock()
+			if s.OnReady != nil {
+				s.OnReady(id, file)
+			}
+		},
+	})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if sessionID != "" {
+		delete(r.live, sessionID)
+	}
+	if err != nil {
+		if sessionID != "" {
+			r.failures[sessionID] = err.Error()
+		}
+		return Result{}, &Failure{Reason: err.Error()}
+	}
+	return Result{SessionID: res.SessionID, SessionFile: res.SessionFile, ToolName: res.ToolName, Args: res.Args}, nil
+}
+
 // State is the §4 session state.
 type State string
 
@@ -147,21 +272,22 @@ const (
 
 // Summary is one row of GET /v1/sessions.
 type Summary struct {
-	ID        string     `json:"id"`
-	Kind      string     `json:"kind"`
-	Label     string     `json:"label"`
-	Model     string     `json:"model"`
-	StartedAt time.Time  `json:"startedAt"`
-	EndedAt   *time.Time `json:"endedAt"`
-	State     State      `json:"state"`
-	Error     *string    `json:"error"`
-	Ref       *string    `json:"ref"`
+	ID        string             `json:"id"`
+	Kind      config.SessionKind `json:"kind"`
+	Label     string             `json:"label"`
+	Model     string             `json:"model"`
+	StartedAt time.Time          `json:"startedAt"`
+	EndedAt   *time.Time         `json:"endedAt"`
+	State     State              `json:"state"`
+	Error     *string            `json:"error"`
+	Ref       *string            `json:"ref"`
+	Parent    *string            `json:"parent"`
 }
 
 // List derives session rows from every session file under dir, newest first, at most limit rows.
-// A session is running until omp writes its session_exit entry; it then is failed when its last
-// assistant message failed, done otherwise.
-func List(dir string, limit int) ([]Summary, error) {
+// A session is running while it is live in this process, done when one of its kind's goal tools
+// has a successful result, failed otherwise.
+func (r *Registry) List(dir string, goals config.Goals, limit int) ([]Summary, error) {
 	files, err := ScanDir(dir)
 	if err != nil {
 		return nil, err
@@ -170,13 +296,16 @@ func List(dir string, limit int) ([]Summary, error) {
 	if len(files) > limit {
 		files = files[:limit]
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	out := make([]Summary, 0, len(files))
 	for _, f := range files {
 		s := Summary{ID: f.ID, StartedAt: f.StartedAt}
-		label := []string{}
+		var label []string
+		var goalTools []string
 		if m := f.Meta; m != nil {
 			s.Kind, s.Model = m.Kind, m.Model
-			label = append(label, m.Kind)
+			label = append(label, string(m.Kind))
 			if m.Seat != "" {
 				label = append(label, m.Seat)
 			}
@@ -184,21 +313,35 @@ func List(dir string, limit int) ([]Summary, error) {
 				s.Ref = new(m.Ref)
 				label = append(label, m.Ref)
 			}
+			switch m.Kind {
+			case config.KindDraft, config.KindVote:
+				goalTools = goals.Of(m.Kind).GoalTools
+			}
 		}
 		s.Label = strings.Join(label, " ")
+		if f.ParentSession != "" {
+			s.Parent = new(f.ParentSession)
+		}
+		done := slices.ContainsFunc(goalTools, func(t string) bool { _, ok := f.ToolOK[t]; return ok })
 		switch {
-		case !f.Exited:
+		case r.live[f.ID]:
 			s.State = StateRunning
-		case f.LastError != "":
-			s.State = StateFailed
-		default:
+		case done:
 			s.State = StateDone
+		default:
+			s.State = StateFailed
+			reason, ok := r.failures[f.ID]
+			switch {
+			case ok:
+			case f.LastError != "":
+				reason = f.LastError
+			default:
+				reason = "ended without a goal tool"
+			}
+			s.Error = &reason
 		}
-		if f.Exited {
+		if s.State != StateRunning {
 			s.EndedAt = new(f.LastAt)
-		}
-		if f.LastError != "" {
-			s.Error = new(f.LastError)
 		}
 		out = append(out, s)
 	}

@@ -1,0 +1,21 @@
+seats:
+  - seat: Coordination
+    default: futureppo-pool/minimax-m3.1-flash
+    others: []
+    content: [code, design, omp]
+    note: 起草决策表时取 where / how 的出处
+  - seat: ClaudeHigh
+    default: futureppo-pool/minimax-m3.1-flash
+    others: []
+    content: [code, design, omp]
+    note: 反对票的可复现反例要文件与行号
+  - seat: Argon
+    default: futureppo-pool/minimax-m3.1-flash
+    others: []
+    content: [design]
+    note: Argon 守护用户意图，不读代码；只核对设计书是否与原话一致
+  - seat: LeadMentor
+    default: futureppo-pool/minimax-m3.1-flash
+    others: []
+    content: [code, design, omp]
+    note: 仲裁分类争议时核对争议行涉及的实现

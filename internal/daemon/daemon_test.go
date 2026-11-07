@@ -2,13 +2,27 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/oh-my-omp/pm-council/internal/config"
 	"github.com/oh-my-omp/pm-council/internal/github"
+	"github.com/oh-my-omp/pm-council/internal/panel"
 	"github.com/oh-my-omp/pm-council/internal/queue"
 )
+
+// fakePanels reports each started job and holds it until its context ends, then reports the cause.
+type fakePanels struct {
+	started chan panel.Job
+	ended   chan error
+}
+
+func (f *fakePanels) Run(ctx context.Context, j panel.Job) {
+	f.started <- j
+	<-ctx.Done()
+	f.ended <- context.Cause(ctx)
+}
 
 type write struct{ item, field, value string }
 
@@ -81,7 +95,7 @@ func TestAdmission(t *testing.T) {
 		},
 		blockers: map[int][]github.IssueRef{4: {{Repo: "o/pm", Number: 1}}},
 	}
-	d, err := New(context.Background(), testConfig(), gh, project)
+	d, err := New(context.Background(), testConfig(), gh, project, &fakePanels{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,5 +139,55 @@ func TestAdmission(t *testing.T) {
 	d.admitAndPublish(context.Background())
 	if len(d.Queue()) != 2 {
 		t.Fatalf("queue after refresh = %v", d.Queue())
+	}
+}
+
+func TestScheduleInterruptsForHumanIssue(t *testing.T) {
+	gh := &fakeGitHub{items: []github.Item{
+		{ID: "i1", Repo: "o/pm", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
+		{ID: "i2", Repo: "o/pm", Number: 2, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D2", "Status": "Todo"}},
+		{ID: "i3", Repo: "o/pm", Number: 3, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D3", "Status": "Todo"}},
+	}}
+	cfg := testConfig()
+	cfg.Council.MaxConcurrentPanels = 2
+	fp := &fakePanels{started: make(chan panel.Job, 8), ended: make(chan error, 8)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := New(ctx, cfg, gh, project, fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d.schedule(ctx, true)
+	got := map[queue.Ref]queue.Start{}
+	for range 2 {
+		j := <-fp.started
+		got[j.Ref] = j.Start
+	}
+	if want := map[queue.Ref]queue.Start{"o/pm#1": queue.StartConvene, "o/pm#2": queue.StartConvene}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("started %v, want %v", got, want)
+	}
+	if len(d.live) != 2 {
+		t.Fatalf("live = %d", len(d.live))
+	}
+
+	// A human issue arrives: both agenda panels are interrupted before the human one starts.
+	gh.items = append(gh.items, github.Item{ID: "i4", Repo: "o/pm", Number: 4, Fields: map[string]string{"Kind": "Human", "Agenda": "D4", "Status": "Todo"}})
+	if err := d.refresh(ctx, 4); err != nil {
+		t.Fatal(err)
+	}
+	d.admitAndPublish(ctx)
+	d.schedule(ctx, false)
+	for range 2 {
+		if cause := <-fp.ended; !errors.Is(cause, panel.ErrInterrupted) {
+			t.Errorf("cause = %v", cause)
+		}
+	}
+	j := <-fp.started
+	if j.Ref != "o/pm#4" || j.Start != queue.StartConvene || len(j.HumanIssues) != 1 || j.HumanIssues[0].Decided {
+		t.Fatalf("human job = %+v", j)
+	}
+	if len(d.live) != 1 || d.live[4] == nil || !d.live[4].human {
+		t.Fatalf("live after interrupt = %v", d.live)
 	}
 }

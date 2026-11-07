@@ -195,7 +195,7 @@ func state(is Issue, waiting, humanPending bool) State {
 	case is.Kind != KindHuman && humanPending:
 		return StateHeld
 	}
-	if p, ok := lastPanel(is.Markers); ok {
+	if p, ok := markers.LastPanel(is.Markers); ok {
 		switch p.Event {
 		case markers.PanelStarted, markers.PanelResumed:
 			return StateDeliberating
@@ -223,19 +223,10 @@ func hasKind(ms []markers.Marker, k markers.Kind) bool {
 	return slices.ContainsFunc(ms, func(m markers.Marker) bool { return m.Kind() == k })
 }
 
-func lastPanel(ms []markers.Marker) (markers.Panel, bool) {
-	for i := len(ms) - 1; i >= 0; i-- {
-		if p, ok := ms[i].(markers.Panel); ok {
-			return p, true
-		}
-	}
-	return markers.Panel{}, false
-}
-
 // panel derives the panel progress: round of the latest pm:panel, the highest draft version,
 // the seats that voted on it, and the voting seats that have not. Nil without a pm:panel.
 func panel(ms []markers.Marker, seats []Seat) *Panel {
-	last, ok := lastPanel(ms)
+	last, ok := markers.LastPanel(ms)
 	if !ok {
 		return nil
 	}
@@ -296,23 +287,60 @@ func AgendaNumber(prefix, agenda string) int {
 	return n
 }
 
-// Pickable returns the issues that may be convened now: ready ones in queue order, at most
-// maxConcurrent minus the panels already deliberating.
-func Pickable(q Queue, maxConcurrent int) []Ref {
-	slots := maxConcurrent
-	for _, e := range q {
-		if e.State == StateDeliberating {
-			slots--
-		}
+// Human reports whether the entry is a human issue.
+func (e Entry) Human() bool { return e.human }
+
+// HumanPending reports whether some human issue on the queue is not decided.
+func HumanPending(q Queue) bool {
+	return slices.ContainsFunc(q, func(e Entry) bool { return e.human && e.State != StateDecided })
+}
+
+// Start is how a panel is started for an issue.
+type Start int
+
+const (
+	StartConvene Start = iota // a fresh panel
+	StartResume               // continue from the issue's markers
+)
+
+func (s Start) String() string {
+	switch s {
+	case StartConvene:
+		return "convene"
+	case StartResume:
+		return "resume"
 	}
-	var out []Ref
+	return fmt.Sprintf("Start(%d)", int(s))
+}
+
+// Candidate is an issue a panel may be started for now.
+type Candidate struct {
+	Ref   Ref
+	Start Start
+}
+
+// Candidates returns, in queue order, the issues without a live panel that a panel may be started
+// for: ready ones are convened; interrupted ones are resumed; failed ones, and deliberating ones
+// without a live panel (orphans of an earlier process), are resumed only on a full rebuild.
+// Superseded, held and blocked issues are never candidates.
+func Candidates(q Queue, live map[Ref]bool, fullRebuild bool) []Candidate {
+	var out []Candidate
 	for _, e := range q {
-		if slots <= 0 {
-			break
+		if live[e.Ref] {
+			continue
 		}
-		if e.State == StateReady {
-			out = append(out, e.Ref)
-			slots--
+		switch e.State {
+		case StateReady:
+			out = append(out, Candidate{e.Ref, StartConvene})
+		case StateInterrupted:
+			out = append(out, Candidate{e.Ref, StartResume})
+		case StateFailed, StateDeliberating:
+			if fullRebuild {
+				out = append(out, Candidate{e.Ref, StartResume})
+			}
+		case StateDecided, StateSuperseded, StateBlocked, StateHeld:
+		default:
+			panic(fmt.Sprintf("unhandled queue state %q", e.State))
 		}
 	}
 	return out

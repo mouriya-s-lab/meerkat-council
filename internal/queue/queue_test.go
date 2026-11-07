@@ -2,6 +2,7 @@ package queue
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -201,7 +202,7 @@ func TestPanelProgress(t *testing.T) {
 	}
 }
 
-func TestOrderAndPickable(t *testing.T) {
+func TestOrder(t *testing.T) {
 	refs := func(q Queue) []Ref {
 		var out []Ref
 		for _, e := range q {
@@ -223,28 +224,65 @@ func TestOrderAndPickable(t *testing.T) {
 	if got, want := refs(q), []Ref{ref(3), ref(4), ref(6), ref(2), ref(1), ref(5)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("order = %v, want %v", got, want)
 	}
-	for _, tc := range []struct {
-		max  int
-		want []Ref
-	}{
-		{1, nil},                   // the one slot is taken by the deliberating panel
-		{2, []Ref{ref(4)}},         // one free slot
-		{3, []Ref{ref(4), ref(2)}}, // agenda number order
-		{9, []Ref{ref(4), ref(2), ref(1), ref(5)}},
-	} {
-		if got := Pickable(q, tc.max); !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("Pickable(max=%d) = %v, want %v", tc.max, got, tc.want)
-		}
+	if HumanPending(q) {
+		t.Errorf("HumanPending with only decided humans")
 	}
-
-	// An undecided human issue is picked first and holds the rest.
 	s.Issues = append(s.Issues, issue(7, KindHuman, StatusTodo, "D12"))
 	q = Build(s)
-	if got := Pickable(q, 9); !reflect.DeepEqual(got, []Ref{ref(7)}) {
-		t.Errorf("Pickable with pending human = %v", got)
-	}
 	if q[0].Ref != ref(3) || q[1].Ref != ref(7) {
 		t.Errorf("humans first: %v", refs(q))
+	}
+	if !HumanPending(q) || !q[1].Human() || q[2].Human() {
+		t.Errorf("HumanPending/Human wrong: %v", refs(q))
+	}
+}
+
+func TestCandidates(t *testing.T) {
+	superseded := markers.Superseded{By: string(ref(9))}
+	issues := []Issue{
+		issue(1, KindAgenda, StatusTodo, "D1"),                                             // ready
+		issue(2, KindAgenda, StatusInProgress, "D2", panelEv(markers.PanelStarted, 1)),     // deliberating
+		issue(3, KindAgenda, StatusInProgress, "D3", panelEv(markers.PanelInterrupted, 1)), // interrupted
+		issue(4, KindAgenda, StatusInProgress, "D4", panelEv(markers.PanelFailed, 1)),      // failed
+		issue(5, KindAgenda, StatusInProgress, "D5", panelEv(markers.PanelInterrupted, 1), superseded),
+		issue(6, KindAgenda, StatusDone, "D6", panelEv(markers.PanelStarted, 1)), // decided
+		blocked(issue(7, KindAgenda, StatusTodo, "D7", panelEv(markers.PanelBlocked, 1)), 8),
+		issue(8, KindHuman, StatusDone, "D8"),
+		issue(9, KindHuman, StatusDone, "D9"),
+		issue(10, KindAgenda, StatusTodo, "D10", panelEv(markers.PanelBlocked, 1)), // prerequisite decided: ready
+	}
+	type c = Candidate
+	for _, tc := range []struct {
+		name   string
+		issues []Issue
+		live   map[Ref]bool
+		full   bool
+		want   []Candidate
+	}{
+		{"event", issues, nil, false, []Candidate{
+			c{ref(1), StartConvene}, c{ref(3), StartResume}, c{ref(7), StartConvene}, c{ref(10), StartConvene},
+		}},
+		{"full rebuild adds failed and orphaned deliberating", issues, nil, true, []Candidate{
+			c{ref(1), StartConvene}, c{ref(2), StartResume}, c{ref(3), StartResume}, c{ref(4), StartResume},
+			c{ref(7), StartConvene}, c{ref(10), StartConvene},
+		}},
+		{"live panels are skipped", issues, map[Ref]bool{ref(1): true, ref(2): true, ref(3): true}, true, []Candidate{
+			c{ref(4), StartResume}, c{ref(7), StartConvene}, c{ref(10), StartConvene},
+		}},
+		{"undecided human holds every agenda issue", append(slices.Clone(issues), issue(11, KindHuman, StatusTodo, "D11")), nil, true, []Candidate{
+			c{ref(11), StartConvene},
+		}},
+		{"interrupted human issue resumes", []Issue{
+			issue(12, KindHuman, StatusInProgress, "D12", panelEv(markers.PanelInterrupted, 1)),
+			issue(13, KindAgenda, StatusTodo, "D1"),
+		}, nil, false, []Candidate{c{ref(12), StartResume}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Candidates(Build(Snapshot{AgendaPrefix: "D", Issues: tc.issues}), tc.live, tc.full)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("Candidates = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

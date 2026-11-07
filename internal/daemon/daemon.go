@@ -1,12 +1,12 @@
 // Package daemon keeps an in-memory copy of the PM repository's agenda issues, rebuilt from
 // GitHub at startup, on every forwarded issue event (that one issue) and every rebuild interval
-// (everything). It admits new agenda issues (Agenda number, Status=Todo) and publishes the queue.
-// GitHub is the only source of state; the copy is always replaceable by a rebuild.
+// (everything). It admits new agenda issues (Agenda number, Status=Todo), publishes the queue and
+// starts, interrupts and resumes panels. GitHub is the only source of issue state; the copy is
+// always replaceable by a rebuild. The live panels are processes of this daemon, not a copy.
 package daemon
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -17,6 +17,7 @@ import (
 	"github.com/oh-my-omp/pm-council/internal/config"
 	"github.com/oh-my-omp/pm-council/internal/github"
 	"github.com/oh-my-omp/pm-council/internal/markers"
+	"github.com/oh-my-omp/pm-council/internal/panel"
 	"github.com/oh-my-omp/pm-council/internal/queue"
 )
 
@@ -30,26 +31,48 @@ type GitHub interface {
 	SetOption(ctx context.Context, projectID, itemID, fieldID, optionID string) error
 }
 
+// Panels runs one panel until it ends or ctx is cancelled (internal/panel).
+type Panels interface {
+	Run(ctx context.Context, j panel.Job)
+}
+
 // record is one PM-repository issue in the Project as last read from GitHub.
 type record struct {
 	itemID string
 	issue  queue.Issue
 }
 
+// livePanel is a panel goroutine started by this daemon. done is closed when it has ended,
+// including its interrupted post.
+type livePanel struct {
+	number int
+	ref    queue.Ref
+	human  bool
+	cancel context.CancelCauseFunc
+	done   chan struct{}
+}
+
 type Daemon struct {
-	cfg     *config.Config
-	gh      GitHub
-	project github.Project
-	events  chan int
-	queue   atomic.Pointer[queue.Queue]
+	cfg      *config.Config
+	gh       GitHub
+	project  github.Project
+	panels   Panels
+	events   chan int
+	finished chan *livePanel
+	queue    atomic.Pointer[queue.Queue]
 
 	// owned by the worker goroutine (Run) after New's initial rebuild
 	records map[int]record
+	live    map[int]*livePanel
 }
 
 // New performs the startup full rebuild (with admission) and returns the daemon ready to Run.
-func New(ctx context.Context, cfg *config.Config, gh GitHub, project github.Project) (*Daemon, error) {
-	d := &Daemon{cfg: cfg, gh: gh, project: project, events: make(chan int, 64), records: map[int]record{}}
+func New(ctx context.Context, cfg *config.Config, gh GitHub, project github.Project, panels Panels) (*Daemon, error) {
+	d := &Daemon{
+		cfg: cfg, gh: gh, project: project, panels: panels,
+		events: make(chan int, 64), finished: make(chan *livePanel),
+		records: map[int]record{}, live: map[int]*livePanel{},
+	}
 	if err := d.rebuild(ctx); err != nil {
 		return nil, fmt.Errorf("startup rebuild: %w", err)
 	}
@@ -75,11 +98,15 @@ func (d *Daemon) Notify(ctx context.Context, number int) error {
 	}
 }
 
-// Run serves events and periodic full rebuilds until ctx ends.
+// Run serves events, panel completions and periodic full rebuilds until ctx ends, then waits for
+// every live panel to end. The startup rebuild done by New counts as a full rebuild.
 func (d *Daemon) Run(ctx context.Context) {
 	tick := time.NewTicker(d.cfg.Runtime.Daemon.RebuildInterval())
 	defer tick.Stop()
+	defer d.waitPanels()
+	d.schedule(ctx, true)
 	for {
+		full := false
 		select {
 		case <-ctx.Done():
 			return
@@ -89,14 +116,96 @@ func (d *Daemon) Run(ctx context.Context) {
 				continue
 			}
 			slog.Info("full rebuild", "issues", len(d.records))
+			full = true
 		case n := <-d.events:
 			if err := d.refresh(ctx, n); err != nil {
 				slog.Error("issue refresh failed", "issue", n, "err", err)
 				continue
 			}
+		case lp := <-d.finished:
+			if d.live[lp.number] == lp {
+				delete(d.live, lp.number)
+			}
+			slog.Info("panel ended", "issue", lp.ref)
+			if err := d.refresh(ctx, lp.number); err != nil {
+				slog.Error("issue refresh failed", "issue", lp.number, "err", err)
+				continue
+			}
 		}
 		d.admitAndPublish(ctx)
+		d.schedule(ctx, full)
 	}
+}
+
+// waitPanels waits for every live panel; their contexts end with the daemon's.
+func (d *Daemon) waitPanels() {
+	for _, lp := range d.live {
+		<-lp.done
+	}
+}
+
+// schedule applies the panel rule after a published queue: while a human issue is undecided,
+// interrupt every live panel of a non-human issue and wait until each has posted; then start
+// panels for the queue's candidates up to maxConcurrentPanels.
+func (d *Daemon) schedule(ctx context.Context, fullRebuild bool) {
+	q := d.Queue()
+	if queue.HumanPending(q) {
+		var stopped []*livePanel
+		for n, lp := range d.live {
+			if !lp.human {
+				slog.Info("interrupting panel for a human issue", "issue", lp.ref)
+				lp.cancel(panel.ErrInterrupted)
+				stopped = append(stopped, lp)
+				delete(d.live, n)
+			}
+		}
+		for _, lp := range stopped {
+			<-lp.done
+		}
+	}
+	live := map[queue.Ref]bool{}
+	for _, lp := range d.live {
+		live[lp.ref] = true
+	}
+	var humans []panel.HumanIssue
+	for _, e := range q {
+		if e.Human() {
+			humans = append(humans, panel.HumanIssue{Ref: e.Ref, Decided: e.State == queue.StateDecided})
+		}
+	}
+	slots := d.cfg.Council.MaxConcurrentPanels - len(d.live)
+	for _, c := range queue.Candidates(q, live, fullRebuild) {
+		if slots <= 0 {
+			return
+		}
+		_, n, ok := queue.ParseRef(string(c.Ref))
+		r, known := d.records[n]
+		if !ok || !known {
+			continue
+		}
+		d.start(ctx, r, c.Start, humans)
+		slots--
+	}
+}
+
+func (d *Daemon) start(ctx context.Context, r record, start queue.Start, humans []panel.HumanIssue) {
+	pctx, cancel := context.WithCancelCause(ctx)
+	lp := &livePanel{number: r.issue.Number, ref: r.issue.Ref, human: r.issue.Kind == queue.KindHuman, cancel: cancel, done: make(chan struct{})}
+	d.live[lp.number] = lp
+	job := panel.Job{
+		Ref: r.issue.Ref, ItemID: r.itemID, Agenda: r.issue.Agenda, Start: start,
+		HumanIssues: slices.Clone(humans),
+	}
+	slog.Info("panel starting", "issue", lp.ref, "start", start)
+	go func() {
+		defer cancel(nil)
+		d.panels.Run(pctx, job)
+		close(lp.done)
+		select {
+		case d.finished <- lp:
+		case <-ctx.Done():
+		}
+	}()
 }
 
 // rebuild re-reads every PM-repository issue in the Project.
@@ -159,15 +268,10 @@ func (d *Daemon) read(ctx context.Context, it github.Item) (record, error) {
 	if err != nil {
 		return record{}, err
 	}
-	for _, b := range bodies {
-		m, err := markers.Parse(b)
-		switch {
-		case errors.Is(err, markers.ErrNoMarker):
-		case err != nil:
-			slog.Error("ignoring malformed marker", "issue", ref, "err", err)
-		default:
-			is.Markers = append(is.Markers, m)
-		}
+	var errs []error
+	is.Markers, errs = markers.Collect(bodies)
+	for _, err := range errs {
+		slog.Error("ignoring malformed marker", "issue", ref, "err", err)
 	}
 	blockers, err := d.gh.BlockedBy(ctx, it.Repo, it.Number)
 	if err != nil {

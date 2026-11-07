@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oh-my-omp/pm-council/internal/config"
 	"github.com/oh-my-omp/pm-council/internal/queue"
 	"github.com/oh-my-omp/pm-council/internal/sessions"
 )
@@ -36,13 +37,15 @@ type Daemon interface {
 
 type Server struct {
 	daemon      Daemon
+	sessions    *sessions.Registry
+	goals       config.Goals
 	pmRepo      string
 	sessionsDir string
 	startedAt   time.Time
 }
 
-func New(d Daemon, pmRepo, sessionsDir string, startedAt time.Time) *Server {
-	return &Server{daemon: d, pmRepo: pmRepo, sessionsDir: sessionsDir, startedAt: startedAt}
+func New(d Daemon, reg *sessions.Registry, goals config.Goals, pmRepo, sessionsDir string, startedAt time.Time) *Server {
+	return &Server{daemon: d, sessions: reg, goals: goals, pmRepo: pmRepo, sessionsDir: sessionsDir, startedAt: startedAt}
 }
 
 // Handler returns the API routes wrapped with CORS headers.
@@ -105,7 +108,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	list, err := sessions.List(s.sessionsDir, limit)
+	list, err := s.sessions.List(s.sessionsDir, s.goals, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
