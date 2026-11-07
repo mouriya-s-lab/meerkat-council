@@ -769,9 +769,10 @@ func (p *run) session(ctx context.Context, kind config.SessionKind, seat config.
 		Meta: sessions.Meta{
 			Kind: kind, Seat: seat.ID, Model: seat.Model, Ref: string(p.job.Ref), Round: st.Round, Version: st.Version,
 		},
-		ContextFile:        contextFile,
-		GuardiansURL:       p.cfg.Runtime.GuardiansURL,
-		MaxContinuePrompts: p.cfg.Runtime.MaxContinuePrompts,
+		ContextFile:           contextFile,
+		GuardiansURL:          p.cfg.Runtime.GuardiansURL,
+		MaxContinuePrompts:    p.cfg.Runtime.MaxContinuePrompts,
+		SessionTimeoutSeconds: p.cfg.Runtime.SessionTimeoutSeconds,
 		OnReady: func(id, file string) {
 			slog.Info("session ready", "issue", p.job.Ref, "kind", kind, "seat", seat.ID, "session", id, "file", file)
 			onReady(markers.PanelSession{Seat: seat.ID, Kind: string(kind), Session: id, File: file})

@@ -123,6 +123,7 @@ Sessions: rows come from the omp session files under `sessionsDir` (header `sess
 | `omp.readyTimeoutSeconds` | seconds an omp child may take to emit its ready frame |
 | `omp.exitGraceSeconds` | seconds an omp child may take to exit after its stdin closes |
 | `maxContinuePrompts` | program-side continue prompts per session before it fails |
+| `sessionTimeoutSeconds` | maximum wall-clock seconds of one seat session before it fails |
 
 `council/council.yaml`: `agenda.prefix` (letters) and `agenda.first` (positive): agenda numbers are `<prefix><n>`, `n` one above the highest number of that prefix in the Project and at least `first`; `maxConcurrentPanels`: panels at once; `resume`: `fork` or `fresh`, how interrupted sessions continue; `implIssue.title` and `implIssue.body`: Go `text/template`s of an implementation issue with `.Ref .Agenda .Row` (the draft row: `.Row.ID .Row.What .Row.Where .Row.How .Row.Deliver.Title .Row.Deliver.Body …`), `.Link` (empty when the issue is created, the launch link when its body is rewritten) and `.Replaces` (nil or `{Old, Ask}`); `launchLink.base` (URL) and `launchLink.frontend.kind`; `reply.body`: template of a `pm:reply` with `.Ref .Agenda .Text` (the draft's settle text) and `.Table` (the decision table); `archive`: `{decisions, votes}` (relative directories of the PM repository) or `null` (absent means `null`). Templates are executed at load with and without `.Link` and `.Replaces`.
 

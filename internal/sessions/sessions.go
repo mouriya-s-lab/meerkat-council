@@ -327,6 +327,8 @@ type Spec struct {
 	ContextFile                string // PM_CONTEXT
 	GuardiansURL               string // PM_GUARDIANS_URL
 	MaxContinuePrompts         int
+	// SessionTimeoutSeconds bounds the whole session; Registry.Run passes it as MaxDuration.
+	SessionTimeoutSeconds int
 	// OnReady, if set, is called once the session id and file are known.
 	OnReady func(sessionID, sessionFile string)
 }
@@ -397,6 +399,7 @@ func (r *Registry) Run(ctx context.Context, s Spec) (Result, error) {
 		Continue:           s.Continue,
 		GoalTools:          s.GoalTools,
 		MaxContinuePrompts: s.MaxContinuePrompts,
+		MaxDuration:        time.Duration(s.SessionTimeoutSeconds) * time.Second,
 		ReadyTimeout:       s.OMP.ReadyTimeout(),
 		ExitGrace:          s.OMP.ExitGrace(),
 		OnReady: func(id, file string) {

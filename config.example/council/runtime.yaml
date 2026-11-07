@@ -18,3 +18,4 @@ omp:
   readyTimeoutSeconds: 120
   exitGraceSeconds: 30
 maxContinuePrompts: 50
+sessionTimeoutSeconds: 300

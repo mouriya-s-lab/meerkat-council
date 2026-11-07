@@ -71,13 +71,14 @@ type LoadedFile struct {
 }
 
 type Runtime struct {
-	App                App    `yaml:"app"`
-	Daemon             Daemon `yaml:"daemon"`
-	SessionsDir        string `yaml:"sessionsDir"`
-	CheckoutDir        string `yaml:"checkoutDir"`
-	GuardiansURL       string `yaml:"guardiansURL"`
-	OMP                OMP    `yaml:"omp"`
-	MaxContinuePrompts int    `yaml:"maxContinuePrompts"`
+	App                   App    `yaml:"app"`
+	Daemon                Daemon `yaml:"daemon"`
+	SessionsDir           string `yaml:"sessionsDir"`
+	CheckoutDir           string `yaml:"checkoutDir"`
+	GuardiansURL          string `yaml:"guardiansURL"`
+	OMP                   OMP    `yaml:"omp"`
+	MaxContinuePrompts    int    `yaml:"maxContinuePrompts"`
+	SessionTimeoutSeconds int    `yaml:"sessionTimeoutSeconds"`
 }
 
 type App struct {
@@ -620,6 +621,7 @@ func load(root string, fsys fs.FS) (*Config, error) {
 		f.positive("omp.readyTimeoutSeconds", r.OMP.ReadyTimeoutSeconds)
 		f.positive("omp.exitGraceSeconds", r.OMP.ExitGraceSeconds)
 		f.positive("maxContinuePrompts", r.MaxContinuePrompts)
+		f.positive("sessionTimeoutSeconds", r.SessionTimeoutSeconds)
 		r.App.WebhookSecretFile = resolve(r.App.WebhookSecretFile)
 		r.SessionsDir = resolve(r.SessionsDir)
 		r.CheckoutDir = resolve(r.CheckoutDir)
