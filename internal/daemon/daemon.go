@@ -371,8 +371,8 @@ func (d *Daemon) read(ctx context.Context, it github.Item) (record, error) {
 	}
 	// The parsed markers, and the time of the comment of the latest pm:panel.
 	// EachComment decodes one page at a time and releases it before fetching the
-	// next; only the parsed markers (with cloned strings) and the PanelAt stamp
-	// are retained. No comment cache or index is kept.
+	// next; only the parsed markers and the PanelAt stamp are retained.
+	// No comment cache or index is kept.
 	err := d.gh.EachComment(ctx, it.Repo, it.Number, func(body string, createdAt time.Time) error {
 		m, err := markers.Parse(body)
 		switch {
