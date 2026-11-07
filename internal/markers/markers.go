@@ -438,3 +438,13 @@ func LastPanel(ms []Marker) (Panel, bool) {
 	}
 	return Panel{}, false
 }
+
+// LastDecision returns the latest pm:decision marker of ms.
+func LastDecision(ms []Marker) (Decision, bool) {
+	for i := len(ms) - 1; i >= 0; i-- {
+		if d, ok := ms[i].(Decision); ok {
+			return d, true
+		}
+	}
+	return Decision{}, false
+}

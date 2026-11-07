@@ -8,6 +8,7 @@ import (
 
 	"github.com/oh-my-omp/pm-council/internal/config"
 	"github.com/oh-my-omp/pm-council/internal/github"
+	"github.com/oh-my-omp/pm-council/internal/markers"
 	"github.com/oh-my-omp/pm-council/internal/panel"
 	"github.com/oh-my-omp/pm-council/internal/queue"
 )
@@ -190,4 +191,65 @@ func TestScheduleInterruptsForHumanIssue(t *testing.T) {
 	if len(d.live) != 1 || d.live[4] == nil || !d.live[4].human {
 		t.Fatalf("live after interrupt = %v", d.live)
 	}
+}
+
+// A human issue's panel ends after superseding an agenda issue: the daemon re-reads the
+// superseded issue before scheduling, so the agenda issue, no longer held, is not convened from
+// the copy read before the supersede.
+func TestPanelEndRefreshesSupersededIssues(t *testing.T) {
+	gh := &fakeGitHub{items: []github.Item{
+		{ID: "i1", Repo: "o/pm", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
+		{ID: "i2", Repo: "o/pm", Number: 2, Fields: map[string]string{"Kind": "Human", "Agenda": "D2", "Status": "In Progress"}},
+	}}
+	cfg := testConfig()
+	cfg.Council.MaxConcurrentPanels = 1
+	fp := &fakePanels{started: make(chan panel.Job, 8), ended: make(chan error, 8)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := New(ctx, cfg, gh, project, fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := entryState(d.Queue(), "o/pm#1"); st != queue.StateHeld {
+		t.Fatalf("agenda issue before the decision = %q, want held", st)
+	}
+
+	// The human panel posts its decision and supersedes #1 on GitHub; the copy still has #1 as Todo.
+	decision, err := markers.Comment("", markers.Decision{
+		Version:    1,
+		Rows:       []markers.DecisionRow{{Row: "r1", Outcome: markers.OutcomePassed, Approve: 1, Threshold: 1, Reason: "approve 1 meets threshold 1"}},
+		Impl:       []string{},
+		Superseded: []string{"o/pm#1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mark, err := markers.Comment("", markers.Superseded{By: "o/pm#2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh.comments = map[int][]string{1: {mark}, 2: {decision}}
+	gh.items[0].Fields = map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Superseded"}
+	gh.items[1].Fields = map[string]string{"Kind": "Human", "Agenda": "D2", "Status": "Done"}
+
+	if err := d.refreshDecided(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	d.admitAndPublish(ctx)
+	d.schedule(ctx, false)
+	if len(d.live) != 0 {
+		t.Fatalf("panels started after the supersede: %v", d.live)
+	}
+	if st := entryState(d.Queue(), "o/pm#1"); st != queue.StateSuperseded {
+		t.Fatalf("agenda issue after the decision = %q, want superseded", st)
+	}
+}
+
+func entryState(q queue.Queue, ref queue.Ref) queue.State {
+	for _, e := range q {
+		if e.Ref == ref {
+			return e.State
+		}
+	}
+	return ""
 }

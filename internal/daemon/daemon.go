@@ -127,7 +127,7 @@ func (d *Daemon) Run(ctx context.Context) {
 				delete(d.live, lp.number)
 			}
 			slog.Info("panel ended", "issue", lp.ref)
-			if err := d.refresh(ctx, lp.number); err != nil {
+			if err := d.refreshDecided(ctx, lp.number); err != nil {
 				slog.Error("issue refresh failed", "issue", lp.number, "err", err)
 				continue
 			}
@@ -142,6 +142,33 @@ func (d *Daemon) waitPanels() {
 	for _, lp := range d.live {
 		<-lp.done
 	}
+}
+
+// refreshDecided re-reads an issue whose panel ended and, when it carries a decision, every PM
+// issue that decision superseded: the panel changed them on GitHub, and scheduling from the old
+// copy would convene an issue that was just superseded.
+func (d *Daemon) refreshDecided(ctx context.Context, number int) error {
+	if err := d.refresh(ctx, number); err != nil {
+		return err
+	}
+	r, ok := d.records[number]
+	if !ok {
+		return nil
+	}
+	dec, ok := markers.LastDecision(r.issue.Markers)
+	if !ok {
+		return nil
+	}
+	for _, ref := range dec.Superseded {
+		repo, n, ok := queue.ParseRef(ref)
+		if !ok || !strings.EqualFold(repo, d.cfg.Repos.PM.Repo) {
+			continue
+		}
+		if err := d.refresh(ctx, n); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // schedule applies the panel rule after a published queue: while a human issue is undecided,
