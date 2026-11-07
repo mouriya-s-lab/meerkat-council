@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -61,6 +62,47 @@ func TestLoadExample(t *testing.T) {
 	if out, err := cfg.Goals.Vote.RenderResume(OpeningData{Ref: "o/r#7", Version: 1}); err != nil || !strings.Contains(out, "o/r#7") {
 		t.Errorf("vote resume = %q, %v", out, err)
 	}
+	if cfg.Tally.Threshold.Of(4) != 3 || cfg.Tally.Arbitration.Seat != "LeadMentor" || cfg.Tally.MaxRounds != 2 || cfg.Council.Archive != nil {
+		t.Errorf("tally = %+v, archive = %+v", cfg.Tally, cfg.Council.Archive)
+	}
+	if !reflect.DeepEqual(cfg.Goals.Of(KindArbitrate).GoalTools, []string{ToolRuling}) || !reflect.DeepEqual(KindRevise.PluginTools(), []string{ToolReadIssue, ToolProxyRead, ToolDraft}) {
+		t.Errorf("arbitrate goal tools %v, revise plugin tools %v", cfg.Goals.Arbitrate.GoalTools, KindRevise.PluginTools())
+	}
+	row := sampleRow()
+	out, err = cfg.Goals.Arbitrate.RenderOpening(OpeningData{Ref: "o/r#7", Agenda: "D7", Version: 1, Categories: cfg.Tally.Categories,
+		Disputes: []DisputeData{{Row: row, Seat: "Argon", Citation: "o/r#2"}}})
+	if err != nil || !strings.Contains(out, row.ID) || !strings.Contains(out, "o/r#2") || !strings.Contains(out, cfg.Tally.Categories[1]) {
+		t.Errorf("arbitrate opening = %q, %v", out, err)
+	}
+	out, err = cfg.Goals.Revise.RenderOpening(OpeningData{Ref: "o/r#7", Round: 2, MaxRounds: 2, Version: 2,
+		Counterexamples: []CounterexampleData{{Seat: "ClaudeHigh", Row: row.ID, Counterexample: "breaks count"}}})
+	if err != nil || !strings.Contains(out, "breaks count") || !strings.Contains(out, "ClaudeHigh") {
+		t.Errorf("revise opening = %q, %v", out, err)
+	}
+
+	link, err := cfg.Council.LaunchLink.Link("o/c", 5, "/Users/x y/c (1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(link)
+	if err != nil || u.Scheme+"://"+u.Host != "http://127.0.0.1:47591" || u.Path != "/o/c/issues/5" || strings.ContainsAny(link, " ()") {
+		t.Fatalf("link %q: %v", link, err)
+	}
+	if spec := u.Query().Get("spec"); spec != `{"cwd":"/Users/x y/c (1)","frontend":{"kind":"tern"}}` {
+		t.Errorf("spec = %s", spec)
+	}
+
+	d := ImplIssueData{Ref: "o/r#7", Agenda: "D7", Row: row}
+	title, err := cfg.Council.ImplIssue.RenderTitle(d)
+	if err != nil || title != row.Deliver.Title {
+		t.Errorf("impl title = %q, %v", title, err)
+	}
+	created, _ := cfg.Council.ImplIssue.RenderBody(d)
+	d.Link, d.Replaces = link, &ReplacesData{Old: "o/c#3", Ask: 42}
+	edited, err := cfg.Council.ImplIssue.RenderBody(d)
+	if err != nil || strings.Contains(created, "47591") || !strings.Contains(edited, link) || !strings.Contains(edited, "o/c#3") || !strings.Contains(edited, "o/r#7") {
+		t.Errorf("impl body created %q edited %q, %v", created, edited, err)
+	}
 }
 
 func TestLoadErrors(t *testing.T) {
@@ -86,6 +128,20 @@ func TestLoadErrors(t *testing.T) {
 		{"bad content", "council/proxy-readers.yaml", "content: [design]", "content: [web]", `council/proxy-readers.yaml: seats[2].content[0]: "web" is not one of code, design, omp`},
 		{"missing others", "council/proxy-readers.yaml", "    others: []\n    content: [design]", "    content: [design]", "council/proxy-readers.yaml: seats[2].others: missing"},
 		{"missing option", "shared/project.yaml", "done: Done, ", "", "shared/project.yaml: fields.status.options.done: missing"},
+		{"veto seat without veto right", "council/tally.yaml", "seats: [Argon]", "seats: [ClaudeHigh]", `council/tally.yaml: veto.seats[0]: seat "ClaudeHigh" does not have the veto right`},
+		{"unknown arbitration seat", "council/tally.yaml", "seat: LeadMentor", "seat: Nobody", `council/tally.yaml: arbitration.seat: "Nobody" is not a seat`},
+		{"arbitration seat without right", "council/tally.yaml", "seat: LeadMentor", "seat: Argon", `council/tally.yaml: arbitration.seat: seat "Argon" does not have the arbitrate right`},
+		{"veto category not a category", "council/tally.yaml", "categories: [意图]\n", "categories: [安全]\n", `council/tally.yaml: veto.categories[0]: "安全" is not one of categories`},
+		{"threshold above one", "council/tally.yaml", "numerator: 3", "numerator: 5", "council/tally.yaml: threshold: numerator 5 exceeds denominator 4"},
+		{"missing maxRounds", "council/tally.yaml", "maxRounds: 2\n", "", "council/tally.yaml: maxRounds"},
+		{"missing veto seats", "council/tally.yaml", "  seats: [Argon]\n", "", "council/tally.yaml: veto.seats: missing"},
+		{"unknown tally key", "council/tally.yaml", "maxRounds", "rounds", "council/tally.yaml: rounds"},
+		{"unguarded replaces", "council/council.yaml", "{{- if .Replaces}}", "{{.Replaces.Old}}{{- if .Replaces}}", "council/council.yaml: implIssue.body"},
+		{"bad launch base", "council/council.yaml", "base: http://127.0.0.1:47591", "base: 127.0.0.1:47591", `council/council.yaml: launchLink.base: "127.0.0.1:47591" is not an http(s) URL`},
+		{"missing frontend", "council/council.yaml", "  frontend: { kind: tern }\n", "", "council/council.yaml: launchLink.frontend.kind: missing"},
+		{"unknown reply field", "council/council.yaml", "{{.Text}}", "{{.Settle}}", "council/council.yaml: reply.body"},
+		{"archive outside the repository", "council/council.yaml", "archive: null", "archive: { decisions: ../d, votes: votes }", `council/council.yaml: archive.decisions: "../d" is not a clean relative directory`},
+		{"arbitrate goal tool", "council/goals.yaml", "goalTools: [pm_ruling]", "goalTools: [pm_vote]", `council/goals.yaml: arbitrate.goalTools[0]: "pm_vote" is not a arbitrate goal tool`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := copyExample(t)

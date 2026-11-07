@@ -1,7 +1,9 @@
 // Package panel convenes and runs one council panel per agenda issue: a draft session for the
-// seat with the draft right, then one vote session per voting seat. It keeps no progress of its
-// own: before every step it re-reads the issue and derives the next step from the pm:panel,
-// pm:draft and pm:vote markers (contract §A). The daemon owns the panel's lifetime through ctx.
+// seat with the draft right, one vote session per voting seat, then the tally: an arbitrate
+// session for category disputes, a new round with a revise session for counterexamples, or the
+// decision's publication. It keeps no progress of its own: before every step it re-reads the
+// issue and derives the next step from the pm:panel, pm:draft, pm:vote, pm:ruling and
+// pm:decision markers (contract §A). The daemon owns the panel's lifetime through ctx.
 package panel
 
 import (
@@ -23,6 +25,7 @@ import (
 	"github.com/oh-my-omp/pm-council/internal/markers"
 	"github.com/oh-my-omp/pm-council/internal/queue"
 	"github.com/oh-my-omp/pm-council/internal/sessions"
+	"github.com/oh-my-omp/pm-council/internal/tally"
 )
 
 // GitHub is the part of the GitHub client a panel uses.
@@ -34,9 +37,11 @@ type GitHub interface {
 	SetOption(ctx context.Context, projectID, itemID, fieldID, optionID string) error
 }
 
-// Tally records a seat's vote (internal/tally).
+// Tally records votes and rulings and publishes decisions (internal/tally).
 type Tally interface {
 	RecordVote(ctx context.Context, ref queue.Ref, seat string, version int, rows []markers.VoteRow) error
+	RecordRuling(ctx context.Context, ref queue.Ref, seat string, version int, rows []markers.RulingRow) error
+	Publish(ctx context.Context, p tally.Publication) error
 }
 
 // ErrInterrupted is the cancel cause the daemon gives a panel it stops for a human issue.
@@ -76,22 +81,24 @@ func New(cfg *config.Config, gh GitHub, project github.Project, reg *sessions.Re
 type StepKind int
 
 const (
-	StepDraft StepKind = iota // no draft of the current round: run the draft session
+	StepDraft StepKind = iota // no draft of the current round: run the draft (round 1) or revise session
 	StepVote                  // a draft exists: run the vote sessions of the seats that have not voted on it
-	StepDone                  // every voting seat voted on the draft: the issue waits for the tally
+	StepDone                  // every voting seat voted on the draft, or it is withdrawn: tally it
 )
 
 // Step is the panel's next step derived from the issue's markers.
 type Step struct {
 	Kind    StepKind
 	Round   int
-	Version int            // StepDraft: the version to post; otherwise the draft's version
-	Draft   *markers.Draft // StepVote, StepDone: the draft voted on
-	Pending []string       // StepVote: voting seats without a vote on Version, in seat order
+	Version int // StepDraft: the version to post; otherwise the draft's version
+	// Draft is the draft voted on (StepVote, StepDone) or revised (StepDraft after round 1); nil
+	// for the first draft.
+	Draft   *markers.Draft
+	Pending []string // StepVote: voting seats without a vote on Version, in seat order
 }
 
 // Derive returns the next step: the round is the latest pm:panel's (1 without one); a draft whose
-// version is below the round does not belong to it.
+// version is below the round does not belong to it. A withdrawn draft is not voted on.
 func Derive(ms []markers.Marker, voters []string) Step {
 	round := 1
 	if p, ok := markers.LastPanel(ms); ok && p.Round > 0 {
@@ -108,7 +115,11 @@ func Derive(ms []markers.Marker, voters []string) Step {
 		if draft != nil {
 			next = draft.Version + 1
 		}
-		return Step{Kind: StepDraft, Round: round, Version: next}
+		return Step{Kind: StepDraft, Round: round, Version: next, Draft: draft}
+	}
+	st := Step{Kind: StepDone, Round: round, Version: draft.Version, Draft: draft}
+	if draft.Withdrawn != nil {
+		return st
 	}
 	voted := map[string]bool{}
 	for _, m := range ms {
@@ -116,7 +127,6 @@ func Derive(ms []markers.Marker, voters []string) Step {
 			voted[v.Seat] = true
 		}
 	}
-	st := Step{Kind: StepDone, Round: round, Version: draft.Version, Draft: draft}
 	for _, s := range voters {
 		if !voted[s] {
 			st.Pending = append(st.Pending, s)
@@ -128,9 +138,9 @@ func Derive(ms []markers.Marker, voters []string) Step {
 	return st
 }
 
-// Run runs the panel until it waits for the tally, fails or ctx ends. A failure is
-// posted as pm:panel failed; cancellation with cause ErrInterrupted as pm:panel interrupted; any
-// other cancellation (the daemon stopping) posts nothing.
+// Run runs the panel until its decision is published, it fails or ctx ends. A failure is posted
+// as pm:panel failed; cancellation with cause ErrInterrupted as pm:panel interrupted; any other
+// cancellation (the daemon stopping) posts nothing.
 func (r *Runner) Run(ctx context.Context, j Job) {
 	repo, n, ok := queue.ParseRef(string(j.Ref))
 	if !ok {
@@ -216,16 +226,17 @@ func (p *run) run(ctx context.Context) (int, []markers.PanelSession, error) {
 			return st.Round, nil, err
 		}
 	case queue.StartResume:
-		if st.Kind == StepDone {
-			slog.Info("panel: nothing to resume; waiting for the tally", "issue", p.job.Ref, "version", st.Version)
-			return st.Round, nil, nil
-		}
-		if last, ok := markers.LastPanel(is.markers); ok && last.Event == markers.PanelInterrupted && p.cfg.Council.Resume == config.ResumeFork {
+		last, ok := markers.LastPanel(is.markers)
+		if ok && last.Event == markers.PanelInterrupted && p.cfg.Council.Resume == config.ResumeFork {
 			forks = last.Sessions
 		}
-		resumed := markers.Panel{Event: markers.PanelResumed, Round: st.Round, Sessions: []markers.PanelSession{}}
-		if err := p.postPanel(ctx, resumed, fmt.Sprintf("小组恢复审议（第 %d 轮）。", st.Round)); err != nil {
-			return st.Round, nil, err
+		// An issue whose sessions are all over and whose panel did not stop waits only for its
+		// tally; it is not resumed, or every rebuild would announce it again.
+		if st.Kind != StepDone || ok && last.Event != markers.PanelStarted && last.Event != markers.PanelResumed {
+			resumed := markers.Panel{Event: markers.PanelResumed, Round: st.Round, Sessions: []markers.PanelSession{}}
+			if err := p.postPanel(ctx, resumed, fmt.Sprintf("小组恢复审议（第 %d 轮）。", st.Round)); err != nil {
+				return st.Round, nil, err
+			}
 		}
 	}
 	if err := p.syncCheckout(ctx); err != nil {
@@ -238,8 +249,10 @@ func (p *run) run(ctx context.Context) (int, []markers.PanelSession, error) {
 		st = Derive(is.markers, p.voters())
 		switch st.Kind {
 		case StepDone:
-			slog.Info("panel: every seat voted; waiting for the tally", "issue", p.job.Ref, "version", st.Version)
-			return st.Round, nil, nil
+			decided, open, err := p.decide(ctx, st, is, forks)
+			if err != nil || decided {
+				return st.Round, open, err
+			}
 		case StepDraft:
 			if open, err := p.draft(ctx, st, is, forks); err != nil {
 				return st.Round, open, err
@@ -252,6 +265,124 @@ func (p *run) run(ctx context.Context) (int, []markers.PanelSession, error) {
 		// A killed session is forked only by the first step after the resume.
 		forks = nil
 	}
+}
+
+// decide tallies the voted draft. Arbitrate runs the arbitrate session and records its ruling;
+// Revise opens the next round; Decide publishes the decision and ends the run. A decision already
+// posted for the version is published again, which finishes whatever its publish left undone.
+func (p *run) decide(ctx context.Context, st Step, is issue, forks []markers.PanelSession) (decided bool, open []markers.PanelSession, err error) {
+	var (
+		votes   []markers.Vote
+		rulings []markers.Ruling
+		posted  *markers.Decision
+	)
+	for _, m := range is.markers {
+		switch m := m.(type) {
+		case markers.Vote:
+			votes = append(votes, m)
+		case markers.Ruling:
+			rulings = append(rulings, m)
+		case markers.Decision:
+			if m.Version == st.Version {
+				posted = &m
+			}
+		}
+	}
+	if posted != nil {
+		return true, nil, p.publish(ctx, st, posted.Rows)
+	}
+	var humans []string
+	for _, h := range p.job.HumanIssues {
+		humans = append(humans, string(h.Ref))
+	}
+	switch o := tally.Evaluate(*st.Draft, votes, rulings, p.cfg.Seats, p.cfg.Tally, humans, st.Round).(type) {
+	case tally.Arbitrate:
+		slog.Info("tally: category dispute", "issue", p.job.Ref, "version", st.Version, "rows", len(o.Disputes))
+		open, err := p.arbitrate(ctx, st, is, o.Disputes, forks)
+		return false, open, err
+	case tally.Revise:
+		round := st.Round + 1
+		slog.Info("tally: counterexamples; next round", "issue", p.job.Ref, "version", st.Version, "rows", o.Rows, "round", round)
+		started := markers.Panel{Event: markers.PanelStarted, Round: round, Sessions: []markers.PanelSession{}}
+		return false, nil, p.postPanel(ctx, started, fmt.Sprintf("小组开始第 %d 轮审议：修订决策表第 %d 版的反例（%s）。", round, st.Version, strings.Join(o.Rows, "、")))
+	case tally.Decide:
+		return true, nil, p.publish(ctx, st, o.Rows)
+	default:
+		panic(fmt.Sprintf("unknown tally outcome %T", o))
+	}
+}
+
+// publish publishes the decision of st's draft. An interrupt that arrives before the publish
+// starts stops the panel; one that arrives during it does not, so a human panel never starts
+// beside a half-published decision. The daemon stopping stops it either way.
+func (p *run) publish(ctx context.Context, st Step, rows []markers.DecisionRow) error {
+	if ctx.Err() != nil {
+		return context.Cause(ctx)
+	}
+	pctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stop := context.AfterFunc(ctx, func() {
+		if !errors.Is(context.Cause(ctx), ErrInterrupted) {
+			cancel()
+		}
+	})
+	defer func() {
+		stop()
+		cancel()
+	}()
+	return p.tally.Publish(pctx, tally.Publication{Ref: p.job.Ref, Agenda: p.job.Agenda, Draft: *st.Draft, Rows: rows})
+}
+
+// arbitrate runs the arbitration seat's session on the disputed rows and records its pm_ruling.
+func (p *run) arbitrate(ctx context.Context, st Step, is issue, disputes []tally.Dispute, forks []markers.PanelSession) ([]markers.PanelSession, error) {
+	seat, _ := p.cfg.Seat(p.cfg.Tally.Arbitration.Seat)
+	var ps *markers.PanelSession
+	res, err := p.session(ctx, config.KindArbitrate, seat, st, is, fork(forks, config.KindArbitrate, seat.ID), disputes, func(s markers.PanelSession) { ps = &s })
+	if err != nil {
+		var open []markers.PanelSession
+		if ps != nil {
+			open = []markers.PanelSession{*ps}
+		}
+		return open, err
+	}
+	if res.ToolName != config.ToolRuling {
+		return nil, fmt.Errorf("arbitrate session %s ended with %s, not %s", res.SessionID, res.ToolName, config.ToolRuling)
+	}
+	var a struct {
+		Rows []markers.RulingRow `json:"rows"`
+	}
+	if err := json.Unmarshal(res.Args, &a); err != nil {
+		return nil, fmt.Errorf("%s arguments of session %s: %w", res.ToolName, res.SessionID, err)
+	}
+	if err := rulingCovers(a.Rows, disputes, p.cfg.Tally.Categories); err != nil {
+		return nil, fmt.Errorf("%s of session %s: %w", res.ToolName, res.SessionID, err)
+	}
+	// The result is recorded even when an interrupt arrives meanwhile: the session is over.
+	return nil, p.tally.RecordRuling(context.WithoutCancel(ctx), p.job.Ref, seat.ID, st.Version, a.Rows)
+}
+
+// rulingCovers checks that rows rule each disputed row exactly once with one of categories (the
+// plugin checks the same; the ruling decides the tally, so the program does not take it on trust).
+func rulingCovers(rows []markers.RulingRow, disputes []tally.Dispute, categories []string) error {
+	want := map[string]bool{}
+	for _, d := range disputes {
+		want[d.Row.ID] = true
+	}
+	seen := map[string]bool{}
+	for _, r := range rows {
+		switch {
+		case !want[r.Row]:
+			return fmt.Errorf("row %s is not disputed", r.Row)
+		case seen[r.Row]:
+			return fmt.Errorf("row %s is ruled twice", r.Row)
+		case !slices.Contains(categories, r.Category):
+			return fmt.Errorf("row %s: category %q is not one of %s", r.Row, r.Category, strings.Join(categories, ", "))
+		}
+		seen[r.Row] = true
+	}
+	if len(seen) != len(want) {
+		return fmt.Errorf("rules %d of %d disputed rows", len(seen), len(want))
+	}
+	return nil
 }
 
 func (p *run) voters() []string {
@@ -298,11 +429,14 @@ func (p *run) read(ctx context.Context) (issue, error) {
 	return is, nil
 }
 
-// draft runs the draft session and posts its pm_draft.
+// draft runs the draft session, or in a later round the revise session, and posts its pm_draft.
 func (p *run) draft(ctx context.Context, st Step, is issue, forks []markers.PanelSession) ([]markers.PanelSession, error) {
-	seat := p.cfg.DraftSeat()
+	seat, kind := p.cfg.DraftSeat(), config.KindDraft
+	if st.Draft != nil {
+		kind = config.KindRevise
+	}
 	var ps *markers.PanelSession
-	res, err := p.session(ctx, config.KindDraft, seat, st, is, fork(forks, config.KindDraft, seat.ID), func(s markers.PanelSession) { ps = &s })
+	res, err := p.session(ctx, kind, seat, st, is, fork(forks, kind, seat.ID), nil, func(s markers.PanelSession) { ps = &s })
 	if err != nil {
 		var open []markers.PanelSession
 		if ps != nil {
@@ -335,6 +469,9 @@ func (p *run) postDraft(ctx context.Context, st Step, res sessions.Result) error
 	if a.Supersedes == nil {
 		a.Supersedes = []string{}
 	}
+	if a.Withdrawn != nil && st.Draft == nil {
+		return fmt.Errorf("session %s withdrew the first draft; only a revise session may withdraw", res.SessionID)
+	}
 	is, err := p.read(ctx)
 	if err != nil {
 		return err
@@ -350,7 +487,7 @@ func (p *run) postDraft(ctx context.Context, st Step, res sessions.Result) error
 		return nil
 	}
 	d := markers.Draft{Version: highest + 1, Rows: a.Rows, Supersedes: a.Supersedes, Settle: a.Settle, Withdrawn: a.Withdrawn}
-	body, err := markers.Comment(draftText(d), d)
+	body, err := markers.Comment(tally.DraftText(d), d)
 	if err != nil {
 		return fmt.Errorf("draft of session %s: %w", res.SessionID, err)
 	}
@@ -380,7 +517,7 @@ func (p *run) vote(ctx context.Context, st Step, is issue, forks []markers.Panel
 	for i, id := range st.Pending {
 		seat, _ := p.cfg.Seat(id)
 		wg.Go(func() {
-			res, err := p.session(stepCtx, config.KindVote, seat, st, is, fork(forks, config.KindVote, id), func(s markers.PanelSession) {
+			res, err := p.session(stepCtx, config.KindVote, seat, st, is, fork(forks, config.KindVote, id), nil, func(s markers.PanelSession) {
 				mu.Lock()
 				slots[i].ps = &s
 				mu.Unlock()
@@ -449,6 +586,8 @@ type sessionContext struct {
 	HumanIssues []HumanIssue        `json:"humanIssues"`
 	Draft       *markers.Draft      `json:"draft"`
 	Escalation  *markers.Escalation `json:"escalation"`
+	Categories  []string            `json:"categories"`
+	Disputed    []string            `json:"disputed"`
 }
 
 type contextRepos struct {
@@ -458,22 +597,49 @@ type contextRepos struct {
 }
 
 // session runs one seat session of kind for step st, forked from fork when it is not nil.
-func (p *run) session(ctx context.Context, kind config.SessionKind, seat config.Seat, st Step, is issue, fork *markers.PanelSession, onReady func(markers.PanelSession)) (sessions.Result, error) {
+// disputes are the rows an arbitrate session rules on.
+func (p *run) session(ctx context.Context, kind config.SessionKind, seat config.Seat, st Step, is issue, fork *markers.PanelSession, disputes []tally.Dispute, onReady func(markers.PanelSession)) (sessions.Result, error) {
 	goal := p.cfg.Goals.Of(kind)
 	data := config.OpeningData{
 		Ref: string(p.job.Ref), Title: is.title, Body: is.body, Agenda: p.job.Agenda,
-		Round: st.Round, Version: st.Version, Escalation: is.ask,
+		Round: st.Round, Version: st.Version, MaxRounds: p.cfg.Tally.MaxRounds, Escalation: is.ask,
+		Categories: p.cfg.Tally.Categories,
 	}
-	var draft *markers.Draft
+	disputed := []string{}
 	switch kind {
+	case config.KindDraft:
 	case config.KindVote:
-		draft = st.Draft
-		b, err := json.Marshal(draft)
+	case config.KindRevise:
+		var votes []markers.Vote
+		for _, m := range is.markers {
+			if v, ok := m.(markers.Vote); ok {
+				votes = append(votes, v)
+			}
+		}
+		for _, c := range tally.Counterexamples(*st.Draft, votes, p.cfg.Seats) {
+			data.Counterexamples = append(data.Counterexamples, config.CounterexampleData{Seat: c.Seat, Row: c.Row, Counterexample: c.Text})
+		}
+	case config.KindArbitrate:
+		for _, d := range disputes {
+			dd := config.DisputeData{Row: d.Row, Seat: d.Seat}
+			if d.Citation != nil {
+				dd.Citation = *d.Citation
+			}
+			if d.Classification != nil {
+				dd.Classification = *d.Classification
+			}
+			data.Disputes = append(data.Disputes, dd)
+			disputed = append(disputed, d.Row.ID)
+		}
+	default:
+		panic(fmt.Sprintf("unknown session kind %q", kind))
+	}
+	if st.Draft != nil {
+		b, err := json.Marshal(st.Draft)
 		if err != nil {
 			return sessions.Result{}, err
 		}
 		data.Draft = string(b)
-	case config.KindDraft:
 	}
 	render, forkFile := goal.RenderOpening, ""
 	if fork != nil {
@@ -494,7 +660,8 @@ func (p *run) session(ctx context.Context, kind config.SessionKind, seat config.
 	sc := sessionContext{
 		Ref: p.job.Ref, Seat: seat.ID, Rights: seat.Rights, PMRepo: p.cfg.Repos.PM.Repo,
 		Repos: contextRepos{Code: []string{}, Design: p.cfg.Repos.Design, OMP: p.cfg.Repos.OMP},
-		Proxy: proxy, HumanIssues: humans, Draft: draft, Escalation: is.escalation,
+		Proxy: proxy, HumanIssues: humans, Draft: st.Draft, Escalation: is.escalation,
+		Categories: p.cfg.Tally.Categories, Disputed: disputed,
 	}
 	for _, c := range p.cfg.Repos.Code {
 		sc.Repos.Code = append(sc.Repos.Code, c.Repo)
@@ -583,30 +750,4 @@ func git(ctx context.Context, dir string, args ...string) error {
 		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
-}
-
-var cell = strings.NewReplacer("|", `\|`, "\r\n", "<br>", "\n", "<br>")
-
-func draftText(d markers.Draft) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "决策表第 %d 版。\n\n| id | what | where | how | 取舍 | 分类 | 缺失设计 | 落到 |\n|---|---|---|---|---|---|---|---|\n", d.Version)
-	for _, r := range d.Rows {
-		deliver := ""
-		if r.Deliver != nil {
-			deliver = cell.Replace(r.Deliver.Repo + ": " + r.Deliver.Title)
-		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %t | %s |\n",
-			cell.Replace(r.ID), cell.Replace(r.What), cell.Replace(r.Where), cell.Replace(r.How),
-			cell.Replace(r.Tradeoff), cell.Replace(r.Category), r.MissingDesign, deliver)
-	}
-	if len(d.Supersedes) > 0 {
-		fmt.Fprintf(&b, "\n变更的旧议题：%s\n", strings.Join(d.Supersedes, "、"))
-	}
-	if d.Settle != nil {
-		fmt.Fprintf(&b, "\n询问的了结方式：%s\n\n%s\n", d.Settle.Kind, d.Settle.Text)
-	}
-	if d.Withdrawn != nil {
-		fmt.Fprintf(&b, "\n撤回：%s\n", *d.Withdrawn)
-	}
-	return b.String()
 }

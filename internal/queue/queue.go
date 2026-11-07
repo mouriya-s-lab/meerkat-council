@@ -110,6 +110,9 @@ type Entry struct {
 	human  bool
 	number int // agenda number, 0 when absent or of another prefix
 	issue  int
+	// unpublished: decided by a pm:decision whose publish has not reached its last write,
+	// Status=Done.
+	unpublished bool
 }
 
 // Panel is a panel's progress derived from pm:panel, pm:draft and pm:vote markers.
@@ -178,6 +181,7 @@ func Build(s Snapshot) Queue {
 		}
 		e.Panel = panel(is.Markers, s.Seats)
 		e.State = state(is, waiting, humanPending)
+		e.unpublished = hasKind(is.Markers, markers.KindDecision) && is.Status != StatusDone
 		q = append(q, e)
 	}
 	slices.SortStableFunc(q, compare)
@@ -320,9 +324,10 @@ type Candidate struct {
 }
 
 // Candidates returns, in queue order, the issues without a live panel that a panel may be started
-// for: ready ones are convened; interrupted ones are resumed; failed ones, and deliberating ones
-// without a live panel (orphans of an earlier process), are resumed only on a full rebuild.
-// Superseded, held and blocked issues are never candidates.
+// for: ready ones are convened; interrupted ones are resumed; failed ones, deliberating ones
+// without a live panel (orphans of an earlier process) and decided ones whose decision is not
+// fully published are resumed only on a full rebuild. Superseded, held and blocked issues are
+// never candidates.
 func Candidates(q Queue, live map[Ref]bool, fullRebuild bool) []Candidate {
 	var out []Candidate
 	for _, e := range q {
@@ -338,7 +343,11 @@ func Candidates(q Queue, live map[Ref]bool, fullRebuild bool) []Candidate {
 			if fullRebuild {
 				out = append(out, Candidate{e.Ref, StartResume})
 			}
-		case StateDecided, StateSuperseded, StateBlocked, StateHeld:
+		case StateDecided:
+			if e.unpublished && fullRebuild {
+				out = append(out, Candidate{e.Ref, StartResume})
+			}
+		case StateSuperseded, StateBlocked, StateHeld:
 		default:
 			panic(fmt.Sprintf("unhandled queue state %q", e.State))
 		}

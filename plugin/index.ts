@@ -2,12 +2,13 @@
  * pm-council omp plugin.
  *
  * The council program starts every seat session with:
- * - PM_KIND: "draft" | "vote"
+ * - PM_KIND: "draft" | "vote" | "revise" | "arbitrate"
  * - PM_GOAL_TOOLS: comma-separated tools of this kind whose successful call completes the session
  * - PM_CONTINUE: the continue text injected while no goal tool has succeeded
  * - PM_META: JSON recorded as the `pm-meta` custom entry of the session
  * - PM_CONTEXT: path of a JSON file with the seat, its rights and proxy-read mapping, the PM
- *   repository, the repositories by category, the human issues, the draft and the escalation
+ *   repository, the repositories by category, the human issues, the draft, the escalation, the
+ *   row categories (tally.yaml) and the rows an arbitrate session rules on
  * - PM_GUARDIANS_URL: base URL of pm-guardians, which serves proxy reads
  * - GH_TOKEN: read access to the PM repository
  *
@@ -34,6 +35,8 @@ interface Context {
 	humanIssues: { ref: string; decided: boolean }[];
 	draft: { version: number; rows: Row[] } | null;
 	escalation: { issue: string; ask: number } | null;
+	categories: string[];
+	disputed: string[];
 }
 
 function requiredEnv(name: string): string {
@@ -90,7 +93,9 @@ async function readIssue(repo: string, number: number, signal: AbortSignal | und
 
 export default function pmCouncil(pi: ExtensionAPI): void {
 	const kind = requiredEnv("PM_KIND");
-	if (kind !== "draft" && kind !== "vote") throw new Error(`pm-council plugin: PM_KIND ${kind} is not draft or vote`);
+	if (kind !== "draft" && kind !== "vote" && kind !== "revise" && kind !== "arbitrate") {
+		throw new Error(`pm-council plugin: PM_KIND ${kind} is not draft, vote, revise or arbitrate`);
+	}
 	const goalTools = new Set(requiredEnv("PM_GOAL_TOOLS").split(","));
 	const continueText = requiredEnv("PM_CONTINUE");
 	const meta: unknown = JSON.parse(requiredEnv("PM_META"));
@@ -172,7 +177,8 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 		},
 	});
 
-	if (kind === "draft") {
+	const categories = ctx.categories.join(", ");
+	if (kind === "draft" || kind === "revise") {
 		const deliver = z.object({ repo: z.string(), title: z.string(), body: z.string() });
 		const row = z.object({
 			id: z.string().describe("Row id <agenda>-<two-digit sequence>, e.g. D3-01"),
@@ -180,9 +186,9 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 			where: z.string(),
 			how: z.string(),
 			tradeoff: z.string(),
-			category: z.string(),
+			category: z.string().describe(`One of: ${categories}`),
 			missingDesign: z.boolean(),
-			deliver: deliver.nullable().describe("Implementation issue to create, or null"),
+			deliver: deliver.nullable().describe(`Implementation issue to create in one of ${ctx.repos.code.join(", ") || "no repository"}, or null`),
 		});
 		pi.registerTool({
 			name: "pm_draft",
@@ -195,17 +201,26 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 					.object({ kind: z.enum(["reply", "replace"]), text: z.string() })
 					.nullable()
 					.describe("How the escalated ask is settled; null when the issue was not raised from an ask"),
-				withdrawn: z.string().nullable().describe("Reason the agenda is withdrawn, or null"),
+				withdrawn: z
+					.string()
+					.nullable()
+					.describe(kind === "revise" ? "Reason the agenda is withdrawn, or null" : "Must be null: only a revision may withdraw the agenda"),
 			}),
 			loadMode: "essential",
 			approval: "read",
 			async execute(_id, params) {
+				if (kind === "draft" && params.withdrawn !== null) throw new Error("withdrawn must be null: only a revise session may withdraw the agenda");
+				if (params.withdrawn !== null && params.withdrawn.trim() === "") throw new Error("withdrawn is an empty reason; give the reason or null");
 				if (params.rows.length === 0 && params.withdrawn === null) throw new Error("rows is empty and withdrawn is null");
 				const ids = new Set<string>();
 				for (const [i, r] of params.rows.entries()) {
 					if (r.id.trim() === "") throw new Error(`rows[${i}].id is empty`);
 					if (ids.has(r.id)) throw new Error(`rows[${i}].id ${r.id} is used twice`);
 					ids.add(r.id);
+					if (!ctx.categories.includes(r.category)) throw new Error(`rows[${i}] (${r.id}): category ${r.category} is not one of: ${categories}`);
+					if (r.deliver && !ctx.repos.code.some(c => sameRef(c, r.deliver?.repo ?? ""))) {
+						throw new Error(`rows[${i}] (${r.id}): deliver.repo ${r.deliver.repo} is not a code repository: [${ctx.repos.code.join(", ")}]`);
+					}
 				}
 				if (ctx.escalation && params.settle === null) {
 					throw new Error(`settle required: ${ctx.escalation.issue} ask ${ctx.escalation.ask}`);
@@ -213,7 +228,7 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 				return recorded("pm_draft");
 			},
 		});
-	} else {
+	} else if (kind === "vote") {
 		const voteRow = z.object({
 			row: z.string().describe("Row id of the draft"),
 			choice: z.enum(["approve", "oppose", "veto"]),
@@ -250,6 +265,30 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 				const missing = want.filter(id => !seen.has(id));
 				if (missing.length > 0) throw new Error(`rows missing for draft v${draft.version}: [${missing.join(", ")}]`);
 				return recorded("pm_vote");
+			},
+		});
+	} else {
+		const disputed = ctx.disputed;
+		pi.registerTool({
+			name: "pm_ruling",
+			label: "Rule categories",
+			description: `Rule the category of every disputed row (${disputed.join(", ")}); a successful call ends your task.`,
+			parameters: z.object({
+				rows: z.array(z.object({ row: z.string().describe(`Disputed row id: ${disputed.join(", ")}`), category: z.string().describe(`One of: ${categories}`) })),
+			}),
+			loadMode: "essential",
+			approval: "read",
+			async execute(_id, params) {
+				const seen = new Set<string>();
+				for (const [i, r] of params.rows.entries()) {
+					if (!disputed.includes(r.row)) throw new Error(`rows[${i}].row ${r.row} is not disputed: [${disputed.join(", ")}]`);
+					if (seen.has(r.row)) throw new Error(`rows[${i}].row ${r.row} is ruled twice`);
+					seen.add(r.row);
+					if (!ctx.categories.includes(r.category)) throw new Error(`rows[${i}] (${r.row}): category ${r.category} is not one of: ${categories}`);
+				}
+				const missing = disputed.filter(id => !seen.has(id));
+				if (missing.length > 0) throw new Error(`disputed rows not ruled: [${missing.join(", ")}]`);
+				return recorded("pm_ruling");
 			},
 		});
 	}

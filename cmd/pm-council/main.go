@@ -100,7 +100,7 @@ func runDaemon(ctx context.Context, root string) error {
 		return err
 	}
 	reg := sessions.NewRegistry()
-	runner := panel.New(cfg, gh, project, reg, tally.New(gh))
+	runner := panel.New(cfg, gh, project, reg, tally.New(cfg, gh, project))
 	d, err := daemon.New(ctx, cfg, gh, project, runner)
 	if err != nil {
 		return err

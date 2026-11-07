@@ -5,9 +5,12 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -19,12 +22,15 @@ import (
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/parser"
 	"github.com/goccy/go-yaml/token"
+
+	"github.com/oh-my-omp/pm-council/internal/markers"
 )
 
 // Config is the validated configuration.
 type Config struct {
 	Runtime      Runtime
 	Council      Council
+	Tally        Tally
 	Seats        []Seat
 	Goals        Goals
 	ProxyReaders []ProxyReader
@@ -73,9 +79,119 @@ func (o OMP) ReadyTimeout() time.Duration { return time.Duration(o.ReadyTimeoutS
 func (o OMP) ExitGrace() time.Duration { return time.Duration(o.ExitGraceSeconds) * time.Second }
 
 type Council struct {
-	Agenda              Agenda `yaml:"agenda"`
-	MaxConcurrentPanels int    `yaml:"maxConcurrentPanels"`
-	Resume              Resume `yaml:"resume"`
+	Agenda              Agenda     `yaml:"agenda"`
+	MaxConcurrentPanels int        `yaml:"maxConcurrentPanels"`
+	Resume              Resume     `yaml:"resume"`
+	ImplIssue           ImplIssue  `yaml:"implIssue"`
+	LaunchLink          LaunchLink `yaml:"launchLink"`
+	Reply               Reply      `yaml:"reply"`
+	// Archive is nil when decisions are not archived in the PM repository.
+	Archive *Archive `yaml:"archive"`
+}
+
+// ImplIssue holds the title and body templates of an implementation issue (contract §7).
+type ImplIssue struct {
+	Title string `yaml:"title"`
+	Body  string `yaml:"body"`
+
+	title, body *template.Template
+}
+
+// ImplIssueData is what the implementation issue templates see.
+type ImplIssueData struct {
+	Ref, Agenda string // the agenda issue and its Agenda number
+	Row         markers.Row
+	// Link is the issue's launch link; empty on the pass that creates the issue.
+	Link string
+	// Replaces is the implementation issue and ask this issue replaces, or nil.
+	Replaces *ReplacesData
+}
+
+type ReplacesData struct {
+	Old string
+	Ask int64
+}
+
+// RenderTitle executes the title template.
+func (t *ImplIssue) RenderTitle(d ImplIssueData) (string, error) { return render(t.title, d) }
+
+// RenderBody executes the body template.
+func (t *ImplIssue) RenderBody(d ImplIssueData) (string, error) { return render(t.body, d) }
+
+// LaunchLink is the omp-dispatch launch link of an implementation issue (contract §7):
+// <base>/<owner>/<repo>/issues/<n>?spec=<{"cwd":<cwd>,"frontend":<frontend>}>.
+type LaunchLink struct {
+	Base     string   `yaml:"base"`
+	Frontend Frontend `yaml:"frontend"`
+}
+
+type Frontend struct {
+	Kind string `yaml:"kind" json:"kind"`
+}
+
+// Link returns the launch link of issue n of repo, started in cwd.
+func (l LaunchLink) Link(repo string, n int, cwd string) (string, error) {
+	spec, err := json.Marshal(struct {
+		Cwd      string   `json:"cwd"`
+		Frontend Frontend `json:"frontend"`
+	}{cwd, l.Frontend})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s/%s/issues/%d?%s", strings.TrimRight(l.Base, "/"), repo, n, url.Values{"spec": {string(spec)}}.Encode()), nil
+}
+
+// Reply holds the body template of a pm:reply that settles an escalated ask.
+type Reply struct {
+	Body string `yaml:"body"`
+
+	body *template.Template
+}
+
+// ReplyData is what the reply template sees: the agenda issue, the draft's settle text and the
+// decision table.
+type ReplyData struct {
+	Ref, Agenda, Text, Table string
+}
+
+// RenderBody executes the body template.
+func (r *Reply) RenderBody(d ReplyData) (string, error) { return render(r.body, d) }
+
+// Archive names the PM-repository directories of decision and vote files.
+type Archive struct {
+	Decisions string `yaml:"decisions"`
+	Votes     string `yaml:"votes"`
+}
+
+// Tally is council/tally.yaml.
+type Tally struct {
+	Threshold   Threshold   `yaml:"threshold"`
+	Veto        Veto        `yaml:"veto"`
+	Arbitration Arbitration `yaml:"arbitration"`
+	MaxRounds   int         `yaml:"maxRounds"`
+	// Categories are the row categories a draft may use and a ruling may assign.
+	Categories []string `yaml:"categories"`
+}
+
+// Threshold is the share of eligible seats whose approval passes a row.
+type Threshold struct {
+	Numerator   int `yaml:"numerator"`
+	Denominator int `yaml:"denominator"`
+}
+
+// Of returns ceil(numerator × eligible / denominator).
+func (t Threshold) Of(eligible int) int {
+	return (t.Numerator*eligible + t.Denominator - 1) / t.Denominator
+}
+
+// Veto names the seats whose vetoes can stand and the categories they stand on.
+type Veto struct {
+	Seats      []string `yaml:"seats"`
+	Categories []string `yaml:"categories"`
+}
+
+type Arbitration struct {
+	Seat string `yaml:"seat"`
 }
 
 // Resume is how a panel continues after an interrupt: fork the killed sessions or start fresh ones.
@@ -119,9 +235,14 @@ func (s Seat) Has(r Right) bool { return slices.Contains(s.Rights, r) }
 type SessionKind string
 
 const (
-	KindDraft SessionKind = "draft"
-	KindVote  SessionKind = "vote"
+	KindDraft     SessionKind = "draft"
+	KindVote      SessionKind = "vote"
+	KindRevise    SessionKind = "revise"
+	KindArbitrate SessionKind = "arbitrate"
 )
+
+// SessionKinds are every session kind, in goals.yaml order.
+var SessionKinds = []SessionKind{KindDraft, KindVote, KindRevise, KindArbitrate}
 
 // Council plugin tools (plugin/index.ts).
 const (
@@ -129,43 +250,46 @@ const (
 	ToolProxyRead = "pm_proxy_read"
 	ToolDraft     = "pm_draft"
 	ToolVote      = "pm_vote"
+	ToolRuling    = "pm_ruling"
 )
 
 // PluginTools are the plugin tools registered in a session of kind k.
 func (k SessionKind) PluginTools() []string {
-	switch k {
-	case KindDraft:
-		return []string{ToolReadIssue, ToolProxyRead, ToolDraft}
-	case KindVote:
-		return []string{ToolReadIssue, ToolProxyRead, ToolVote}
-	}
-	panic(fmt.Sprintf("unknown session kind %q", k))
+	return append([]string{ToolReadIssue, ToolProxyRead}, k.goalCapable()...)
 }
 
 // goalCapable are the plugin tools of kind k whose arguments the program acts on.
 func (k SessionKind) goalCapable() []string {
 	switch k {
-	case KindDraft:
+	case KindDraft, KindRevise:
 		return []string{ToolDraft}
 	case KindVote:
 		return []string{ToolVote}
+	case KindArbitrate:
+		return []string{ToolRuling}
 	}
 	panic(fmt.Sprintf("unknown session kind %q", k))
 }
 
 // Goals holds each session kind's goal tools and prompts (council/goals.yaml).
 type Goals struct {
-	Draft Goal `yaml:"draft"`
-	Vote  Goal `yaml:"vote"`
+	Draft     Goal `yaml:"draft"`
+	Vote      Goal `yaml:"vote"`
+	Revise    Goal `yaml:"revise"`
+	Arbitrate Goal `yaml:"arbitrate"`
 }
 
 // Of returns the goal of kind k.
-func (g Goals) Of(k SessionKind) Goal {
+func (g *Goals) Of(k SessionKind) *Goal {
 	switch k {
 	case KindDraft:
-		return g.Draft
+		return &g.Draft
 	case KindVote:
-		return g.Vote
+		return &g.Vote
+	case KindRevise:
+		return &g.Revise
+	case KindArbitrate:
+		return &g.Arbitrate
 	}
 	panic(fmt.Sprintf("unknown session kind %q", k))
 }
@@ -186,9 +310,18 @@ type Goal struct {
 type OpeningData struct {
 	Ref, Title, Body, Agenda string
 	Round, Version           int
-	// Draft is the draft marker JSON for vote sessions; empty for draft sessions.
+	// MaxRounds is tally.yaml maxRounds.
+	MaxRounds int
+	// Draft is the draft marker JSON: the draft voted on (vote), revised (revise) or disputed
+	// (arbitrate); empty for draft sessions.
 	Draft      string
 	Escalation *EscalationData
+	// Counterexamples are the opposing votes' counterexamples on the draft (revise sessions).
+	Counterexamples []CounterexampleData
+	// Disputes are the rows to arbitrate with the vetoes that disputed them (arbitrate sessions).
+	Disputes []DisputeData
+	// Categories are tally.yaml categories.
+	Categories []string
 }
 
 // EscalationData is the ask an agenda issue was raised from: its implementation issue, the ask
@@ -199,13 +332,24 @@ type EscalationData struct {
 	AskText string
 }
 
+// CounterexampleData is one seat's counterexample against one row.
+type CounterexampleData struct {
+	Seat, Row, Counterexample string
+}
+
+// DisputeData is one disputed row: its draft row and the veto that disputes its category.
+type DisputeData struct {
+	Row                            markers.Row
+	Seat, Citation, Classification string
+}
+
 // RenderOpening executes the opening template.
-func (g Goal) RenderOpening(d OpeningData) (string, error) { return render(g.opening, d) }
+func (g *Goal) RenderOpening(d OpeningData) (string, error) { return render(g.opening, d) }
 
 // RenderResume executes the resume template.
-func (g Goal) RenderResume(d OpeningData) (string, error) { return render(g.resume, d) }
+func (g *Goal) RenderResume(d OpeningData) (string, error) { return render(g.resume, d) }
 
-func render(t *template.Template, d OpeningData) (string, error) {
+func render(t *template.Template, d any) (string, error) {
 	var b strings.Builder
 	if err := t.Execute(&b, d); err != nil {
 		return "", err
@@ -356,6 +500,7 @@ func Load(root string) (*Config, error) {
 	var (
 		rt  Runtime
 		cn  Council
+		ty  Tally
 		sf  seatsFile
 		gl  Goals
 		pr  proxyReadersFile
@@ -368,6 +513,7 @@ func Load(root string) (*Config, error) {
 	}{
 		{"council/runtime.yaml", &rt},
 		{"council/council.yaml", &cn},
+		{"council/tally.yaml", &ty},
 		{"council/seats.yaml", &sf},
 		{"council/goals.yaml", &gl},
 		{"council/proxy-readers.yaml", &pr},
@@ -380,7 +526,7 @@ func Load(root string) (*Config, error) {
 	}
 
 	v := &validator{}
-	cfg := &Config{Runtime: rt, Council: cn, Seats: sf.Seats, Goals: gl, ProxyReaders: pr.Seats, Repos: rep, Project: prj}
+	cfg := &Config{Runtime: rt, Council: cn, Tally: ty, Seats: sf.Seats, Goals: gl, ProxyReaders: pr.Seats, Repos: rep, Project: prj}
 	councilDir := filepath.Join(root, "council")
 	resolve := func(p string) string {
 		if p == "" || filepath.IsAbs(p) {
@@ -429,6 +575,16 @@ func Load(root string) (*Config, error) {
 			f.missing("resume")
 		default:
 			f.errorf("resume", "%q is not one of fork, fresh", cfg.Council.Resume)
+		}
+		c := &cfg.Council
+		c.ImplIssue.title = f.template("implIssue.title", c.ImplIssue.Title, implIssueSamples()...)
+		c.ImplIssue.body = f.template("implIssue.body", c.ImplIssue.Body, implIssueSamples()...)
+		f.url("launchLink.base", c.LaunchLink.Base)
+		f.str("launchLink.frontend.kind", c.LaunchLink.Frontend.Kind)
+		c.Reply.body = f.template("reply.body", c.Reply.Body, ReplyData{Ref: "o/r#1", Agenda: "A1", Text: "t", Table: "|"})
+		if a := c.Archive; a != nil {
+			f.repoPath("archive.decisions", a.Decisions)
+			f.repoPath("archive.votes", a.Votes)
 		}
 	}
 
@@ -492,10 +648,56 @@ func Load(root string) (*Config, error) {
 		}
 	}
 
+	// tally.yaml
+	{
+		f := v.file("council/tally.yaml")
+		t := cfg.Tally
+		f.positive("threshold.numerator", t.Threshold.Numerator)
+		f.positive("threshold.denominator", t.Threshold.Denominator)
+		if t.Threshold.Numerator > t.Threshold.Denominator {
+			f.errorf("threshold", "numerator %d exceeds denominator %d", t.Threshold.Numerator, t.Threshold.Denominator)
+		}
+		f.positive("maxRounds", t.MaxRounds)
+		f.nonEmpty("categories", len(t.Categories))
+		cats := map[string]bool{}
+		for i, c := range t.Categories {
+			cp := fmt.Sprintf("categories[%d]", i)
+			if !f.str(cp, c) {
+				continue
+			}
+			if cats[c] {
+				f.errorf(cp, "duplicate category %q", c)
+			}
+			cats[c] = true
+		}
+		seat := func(path, id string, r Right) {
+			if !f.str(path, id) {
+				return
+			}
+			switch s, ok := cfg.Seat(id); {
+			case !ok:
+				f.errorf(path, "%q is not a seat of council/seats.yaml", id)
+			case !s.Has(r):
+				f.errorf(path, "seat %q does not have the %s right", id, r)
+			}
+		}
+		f.present("veto.seats", t.Veto.Seats != nil)
+		for i, id := range t.Veto.Seats {
+			seat(fmt.Sprintf("veto.seats[%d]", i), id, RightVeto)
+		}
+		f.present("veto.categories", t.Veto.Categories != nil)
+		for i, c := range t.Veto.Categories {
+			if cp := fmt.Sprintf("veto.categories[%d]", i); f.str(cp, c) && !cats[c] {
+				f.errorf(cp, "%q is not one of categories", c)
+			}
+		}
+		seat("arbitration.seat", t.Arbitration.Seat, RightArbitrate)
+	}
+
 	// goals.yaml
 	{
 		f := v.file("council/goals.yaml")
-		for _, k := range []SessionKind{KindDraft, KindVote} {
+		for _, k := range SessionKinds {
 			g := cfg.Goals.Of(k)
 			p := string(k)
 			f.nonEmpty(p+".goalTools", len(g.GoalTools))
@@ -511,14 +713,8 @@ func Load(root string) (*Config, error) {
 				seen[t] = true
 			}
 			f.str(p+".continue", g.Continue)
-			g.opening = f.template(p+".opening", g.Opening)
-			g.resume = f.template(p+".resume", g.Resume)
-			switch k {
-			case KindDraft:
-				cfg.Goals.Draft = g
-			case KindVote:
-				cfg.Goals.Vote = g
-			}
+			g.opening = f.template(p+".opening", g.Opening, openingSamples()...)
+			g.resume = f.template(p+".resume", g.Resume, openingSamples()...)
 		}
 	}
 
@@ -667,9 +863,16 @@ func (f fileValidator) exists(path, file string) {
 	}
 }
 
-// template parses s as a text/template and executes it once without and once with an escalation,
-// so that a field the data does not have is a load error, not a panel failure.
-func (f fileValidator) template(path, s string) *template.Template {
+// repoPath checks a directory of the PM repository: relative, slash-separated and clean.
+func (f fileValidator) repoPath(key, s string) {
+	if f.str(key, s) && (path.IsAbs(s) || path.Clean(s) != s || s == "." || s == ".." || strings.HasPrefix(s, "../")) {
+		f.errorf(key, "%q is not a clean relative directory of the repository", s)
+	}
+}
+
+// template parses s as a text/template and executes it with each sample, so that a field the
+// data does not have, or a nil the template does not guard, is a load error, not a panel failure.
+func (f fileValidator) template(path, s string, samples ...any) *template.Template {
 	if !f.str(path, s) {
 		return nil
 	}
@@ -678,15 +881,44 @@ func (f fileValidator) template(path, s string) *template.Template {
 		f.errorf(path, "%v", err)
 		return nil
 	}
-	sample := OpeningData{Ref: "o/r#1", Title: "t", Body: "b", Agenda: "A1", Round: 1, Version: 1, Draft: "{}"}
-	for _, esc := range []*EscalationData{nil, {Issue: "o/c#1", Ask: 1, AskText: "a"}} {
-		sample.Escalation = esc
+	for _, sample := range samples {
 		if _, err := render(t, sample); err != nil {
 			f.errorf(path, "%v", err)
 			return nil
 		}
 	}
 	return t
+}
+
+// openingSamples are opening data with and without an escalation, counterexamples and disputes.
+func openingSamples() []any {
+	row := sampleRow()
+	full := OpeningData{
+		Ref: "o/r#1", Title: "t", Body: "b", Agenda: "A1", Round: 2, Version: 2, MaxRounds: 2, Draft: "{}",
+		Escalation:      &EscalationData{Issue: "o/c#1", Ask: 1, AskText: "a"},
+		Counterexamples: []CounterexampleData{{Seat: "S", Row: row.ID, Counterexample: "c"}},
+		Disputes:        []DisputeData{{Row: row, Seat: "S", Citation: "o/r#2", Classification: "k"}},
+		Categories:      []string{"k"},
+	}
+	bare := OpeningData{Ref: "o/r#1", Title: "t", Body: "b", Agenda: "A1", Round: 1, Version: 1, MaxRounds: 2}
+	return []any{bare, full}
+}
+
+// implIssueSamples are implementation issue data on the create and edit passes, with and
+// without a replaced issue.
+func implIssueSamples() []any {
+	var out []any
+	for _, link := range []string{"", "http://h/o/c/issues/1?spec=x"} {
+		for _, rep := range []*ReplacesData{nil, {Old: "o/c#2", Ask: 1}} {
+			out = append(out, ImplIssueData{Ref: "o/r#1", Agenda: "A1", Row: sampleRow(), Link: link, Replaces: rep})
+		}
+	}
+	return out
+}
+
+func sampleRow() markers.Row {
+	return markers.Row{ID: "A1-01", What: "w", Where: "p", How: "h", Tradeoff: "t", Category: "k",
+		Deliver: &markers.Deliver{Repo: "o/c", Title: "t", Body: "b"}}
 }
 
 func (f fileValidator) selectField(path, name string, options []Named) {
