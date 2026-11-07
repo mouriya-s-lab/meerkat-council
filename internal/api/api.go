@@ -1,5 +1,5 @@
-// Package api serves the daemon's HTTP API: contract §4 (health, sessions), §C (queue) and the
-// event endpoint the council GitHub App forwards issue events to.
+// Package api serves the daemon's HTTP API: contract §4 (health, sessions), §C (queue), the event
+// endpoint the council GitHub App forwards issue events to, and the configuration report and check.
 package api
 
 import (
@@ -39,13 +39,14 @@ type Server struct {
 	daemon      Daemon
 	sessions    *sessions.Registry
 	goals       config.Goals
+	loaded      config.Loaded
 	pmRepo      string
 	sessionsDir string
 	startedAt   time.Time
 }
 
-func New(d Daemon, reg *sessions.Registry, goals config.Goals, pmRepo, sessionsDir string, startedAt time.Time) *Server {
-	return &Server{daemon: d, sessions: reg, goals: goals, pmRepo: pmRepo, sessionsDir: sessionsDir, startedAt: startedAt}
+func New(d Daemon, reg *sessions.Registry, goals config.Goals, loaded config.Loaded, pmRepo, sessionsDir string, startedAt time.Time) *Server {
+	return &Server{daemon: d, sessions: reg, goals: goals, loaded: loaded, pmRepo: pmRepo, sessionsDir: sessionsDir, startedAt: startedAt}
 }
 
 // Handler returns the API routes wrapped with CORS headers.
@@ -56,6 +57,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/events", s.event)
 	mux.HandleFunc("GET /v1/sessions", s.listSessions)
 	mux.HandleFunc("GET /v1/sessions/{id}/log", s.sessionLog)
+	mux.HandleFunc("GET /v1/config", s.loadedConfig)
+	mux.HandleFunc("POST /v1/config/check", s.checkConfig)
 	mux.HandleFunc("OPTIONS /", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
@@ -77,6 +80,36 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) queue(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.daemon.Queue())
+}
+
+func (s *Server) loadedConfig(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.loaded)
+}
+
+// checkConfig loads the files of the body in memory with the loader the daemon started with and
+// reports the issues; the running configuration and the disk are untouched.
+func (s *Server) checkConfig(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Files map[string]string `json:"files"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "body: "+err.Error())
+		return
+	}
+	if body.Files == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", `body must be {"files": {"<path>": "<content>"}}`)
+		return
+	}
+	issues, err := config.Check(body.Files)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if len(issues) == 0 {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": false, "errors": issues})
 }
 
 func (s *Server) event(w http.ResponseWriter, r *http.Request) {

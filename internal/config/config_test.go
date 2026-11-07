@@ -1,10 +1,12 @@
 package config
 
 import (
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -159,6 +161,108 @@ func TestLoadErrors(t *testing.T) {
 			_, err = Load(root)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// exampleFiles are the files of config.example that the loader reads, by path relative to the root.
+var exampleFiles = []string{
+	"council/runtime.yaml",
+	"council/council.yaml",
+	"council/seats.yaml",
+	"council/goals.yaml",
+	"council/tally.yaml",
+	"council/proxy-readers.yaml",
+	"council/omp/prompts/Argon.md",
+	"council/omp/prompts/ClaudeHigh.md",
+	"council/omp/prompts/Coordination.md",
+	"council/omp/prompts/LeadMentor.md",
+	"shared/repos.yaml",
+	"shared/project.yaml",
+}
+
+func readFiles(t *testing.T, root string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	for _, rel := range exampleFiles {
+		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[rel] = string(b)
+	}
+	return files
+}
+
+func TestBlobSHA(t *testing.T) {
+	// `printf 'hello\n' | git hash-object --stdin`
+	if got := blobSHA([]byte("hello\n")); got != "ce013625030ba8dba906f756967f9e9ca394464a" {
+		t.Errorf("blobSHA = %s", got)
+	}
+}
+
+func TestLoadedFiles(t *testing.T) {
+	root := copyExample(t)
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range cfg.Loaded.Files {
+		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(f.Path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.SHA != blobSHA(b) {
+			t.Errorf("%s sha = %s, want %s", f.Path, f.SHA, blobSHA(b))
+		}
+		got = append(got, f.Path)
+	}
+	want := slices.Clone(exampleFiles)
+	slices.Sort(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("loaded files = %v, want %v", got, want)
+	}
+	if cfg.Loaded.LoadedAt.IsZero() {
+		t.Error("LoadedAt not set")
+	}
+}
+
+func TestCheck(t *testing.T) {
+	valid := readFiles(t, copyExample(t))
+	for _, tc := range []struct {
+		name   string
+		mutate func(files map[string]string)
+		// file and key of the one expected issue; empty file for a valid set
+		file, key string
+	}{
+		{name: "valid set", mutate: func(map[string]string) {}},
+		{"unknown key", func(f map[string]string) {
+			f["council/council.yaml"] = strings.Replace(f["council/council.yaml"], "maxConcurrentPanels", "maxPanels", 1)
+		}, "council/council.yaml", "maxPanels"},
+		{"missing key", func(f map[string]string) {
+			f["council/council.yaml"] = strings.Replace(f["council/council.yaml"], "prefix: D, ", "", 1)
+		}, "council/council.yaml", "agenda.prefix"},
+		{"missing referenced file", func(f map[string]string) {
+			delete(f, "council/omp/prompts/Argon.md")
+		}, "council/seats.yaml", "seats[2].prompt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := maps.Clone(valid)
+			tc.mutate(files)
+			issues, err := Check(files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.file == "" {
+				if len(issues) != 0 {
+					t.Fatalf("issues = %v, want none", issues)
+				}
+				return
+			}
+			if len(issues) != 1 || issues[0].File != tc.file || issues[0].Key != tc.key {
+				t.Fatalf("issues = %v, want one at %s: %s", issues, tc.file, tc.key)
 			}
 		})
 	}

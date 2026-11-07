@@ -5,9 +5,12 @@
 package config
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path"
@@ -36,6 +39,35 @@ type Config struct {
 	ProxyReaders []ProxyReader
 	Repos        Repos
 	Project      Project
+	Loaded       Loaded
+}
+
+// Issue is one configuration error: its file, the YAML key path (empty when the error is not about a
+// key) and its message. Its text is the startup error.
+type Issue struct {
+	File    string `json:"file"`
+	Key     string `json:"key"`
+	Message string `json:"message"`
+}
+
+func (i Issue) Error() string {
+	if i.Key == "" {
+		return i.File + ": " + i.Message
+	}
+	return i.File + ": " + i.Key + ": " + i.Message
+}
+
+// Loaded is the configuration as it was loaded: when, and the git blob sha of every file read to
+// build it, sorted by path.
+type Loaded struct {
+	LoadedAt time.Time    `json:"loadedAt"`
+	Files    []LoadedFile `json:"files"`
+}
+
+// LoadedFile is one loaded file: its path relative to the config root and its git blob sha.
+type LoadedFile struct {
+	Path string `json:"path"`
+	SHA  string `json:"sha"`
 }
 
 type Runtime struct {
@@ -496,7 +528,35 @@ var (
 )
 
 // Load reads and validates the configuration under root.
-func Load(root string) (*Config, error) {
+func Load(root string) (*Config, error) { return load(root, os.DirFS(root)) }
+
+// Check validates candidate configuration files, given by path relative to the config root and by
+// content, with the loader Load uses. The candidates are the only files there are: nothing is read
+// from disk, and a file not given does not exist. It returns the issues Load would fail with.
+func Check(files map[string]string) ([]Issue, error) {
+	_, err := load("", memFS(files))
+	if err == nil {
+		return nil, nil
+	}
+	leaves := []error{err}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		leaves = joined.Unwrap()
+	}
+	issues := make([]Issue, 0, len(leaves))
+	for _, e := range leaves {
+		var issue Issue
+		if !errors.As(e, &issue) {
+			return nil, fmt.Errorf("config check: %w", e)
+		}
+		issues = append(issues, issue)
+	}
+	return issues, nil
+}
+
+// load reads and validates the configuration files of fsys. root is the config root; it only makes
+// the runtime and prompt paths the config stores absolute.
+func load(root string, fsys fs.FS) (*Config, error) {
+	src := &source{fsys: fsys, blobs: map[string]string{}}
 	var (
 		rt  Runtime
 		cn  Council
@@ -520,12 +580,12 @@ func Load(root string) (*Config, error) {
 		{"shared/repos.yaml", &rep},
 		{"shared/project.yaml", &prj},
 	} {
-		if err := decodeFile(root, f.rel, f.dst); err != nil {
+		if err := decodeFile(src, f.rel, f.dst); err != nil {
 			return nil, err
 		}
 	}
 
-	v := &validator{}
+	v := &validator{src: src}
 	cfg := &Config{Runtime: rt, Council: cn, Tally: ty, Seats: sf.Seats, Goals: gl, ProxyReaders: pr.Seats, Repos: rep, Project: prj}
 	councilDir := filepath.Join(root, "council")
 	resolve := func(p string) string {
@@ -609,7 +669,7 @@ func Load(root string) (*Config, error) {
 					f.errorf(p+".prompt", "%q must be relative to council/", s.Prompt)
 				} else {
 					cfg.Seats[i].Prompt = resolve(s.Prompt)
-					f.exists(p+".prompt", cfg.Seats[i].Prompt)
+					f.exists(p+".prompt", path.Join("council", s.Prompt))
 				}
 			}
 			f.nonEmpty(p+".tools", len(s.Tools))
@@ -794,10 +854,110 @@ func Load(root string) (*Config, error) {
 	if err := errors.Join(v.errs...); err != nil {
 		return nil, err
 	}
+	cfg.Loaded = Loaded{LoadedAt: time.Now().UTC(), Files: src.files()}
 	return cfg, nil
 }
 
-type validator struct{ errs []error }
+// validator collects the load errors of one load; files are read through src.
+type validator struct {
+	errs []error
+	src  *source
+}
+
+// source reads configuration files from fsys and records the git blob sha of each file it reads.
+type source struct {
+	fsys  fs.FS
+	blobs map[string]string
+}
+
+// read returns the content of rel, a path relative to the config root, and records its blob sha.
+func (s *source) read(rel string) ([]byte, error) {
+	b, err := fs.ReadFile(s.fsys, rel)
+	if err != nil {
+		return nil, err
+	}
+	s.blobs[rel] = blobSHA(b)
+	return b, nil
+}
+
+// files lists the files read so far, sorted by path.
+func (s *source) files() []LoadedFile {
+	out := make([]LoadedFile, 0, len(s.blobs))
+	for p, sha := range s.blobs {
+		out = append(out, LoadedFile{Path: p, SHA: sha})
+	}
+	slices.SortFunc(out, func(a, b LoadedFile) int { return strings.Compare(a.Path, b.Path) })
+	return out
+}
+
+// blobSHA is the git blob sha of content b: sha1 over "blob <len>\x00" followed by b.
+func blobSHA(b []byte) string {
+	h := sha1.New()
+	fmt.Fprintf(h, "blob %d\x00", len(b))
+	h.Write(b)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// memFS is a read-only in-memory fs.FS over the files of a check; a directory exists where some
+// file lies beneath it.
+type memFS map[string]string
+
+func (m memFS) Open(name string) (fs.File, error) {
+	if !fs.ValidPath(name) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+	}
+	if s, ok := m[name]; ok {
+		return &memFile{info: memInfo{name: path.Base(name), size: int64(len(s))}, r: strings.NewReader(s)}, nil
+	}
+	for k := range m {
+		if strings.HasPrefix(k, name+"/") {
+			return &memFile{info: memInfo{name: path.Base(name), dir: true}}, nil
+		}
+	}
+	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+}
+
+// memFile is an open memFS file (r set) or directory.
+type memFile struct {
+	info memInfo
+	r    *strings.Reader
+}
+
+func (f *memFile) Stat() (fs.FileInfo, error) { return f.info, nil }
+
+func (f *memFile) Read(b []byte) (int, error) {
+	if f.r == nil {
+		return 0, &fs.PathError{Op: "read", Path: f.info.name, Err: errIsDir}
+	}
+	return f.r.Read(b)
+}
+
+func (f *memFile) Close() error { return nil }
+
+var errIsDir = errors.New("is a directory")
+
+type memInfo struct {
+	name string
+	size int64
+	dir  bool
+}
+
+func (i memInfo) Name() string { return i.name }
+
+func (i memInfo) Size() int64 { return i.size }
+
+func (i memInfo) Mode() fs.FileMode {
+	if i.dir {
+		return fs.ModeDir | 0o555
+	}
+	return 0o444
+}
+
+func (i memInfo) ModTime() time.Time { return time.Time{} }
+
+func (i memInfo) IsDir() bool { return i.dir }
+
+func (i memInfo) Sys() any { return nil }
 
 type fileValidator struct {
 	v    *validator
@@ -807,7 +967,7 @@ type fileValidator struct {
 func (v *validator) file(name string) fileValidator { return fileValidator{v, name} }
 
 func (f fileValidator) errorf(path, format string, args ...any) {
-	f.v.errs = append(f.v.errs, fmt.Errorf("%s: %s: %s", f.name, path, fmt.Sprintf(format, args...)))
+	f.v.errs = append(f.v.errs, Issue{File: f.name, Key: path, Message: fmt.Sprintf(format, args...)})
 }
 
 func (f fileValidator) missing(path string) { f.errorf(path, "missing") }
@@ -855,11 +1015,15 @@ func (f fileValidator) url(path, s string) {
 	}
 }
 
-func (f fileValidator) exists(path, file string) {
-	if st, err := os.Stat(file); err != nil {
+// exists reports unless rel, a file relative to the config root, is a readable file; it records the file.
+func (f fileValidator) exists(path, rel string) {
+	st, err := fs.Stat(f.v.src.fsys, rel)
+	if err != nil {
 		f.errorf(path, "%v", err)
 	} else if st.IsDir() {
-		f.errorf(path, "%s is a directory", file)
+		f.errorf(path, "%s is a directory", rel)
+	} else if _, err := f.v.src.read(rel); err != nil {
+		f.errorf(path, "%v", err)
 	}
 }
 
@@ -936,11 +1100,11 @@ func (f fileValidator) selectField(path, name string, options []Named) {
 	}
 }
 
-// decodeFile strictly decodes root/rel into dst. Decode errors are reported with the YAML key path.
-func decodeFile(root, rel string, dst any) error {
-	b, err := os.ReadFile(filepath.Join(root, rel))
+// decodeFile strictly decodes the file rel of src into dst. Decode errors are reported with the YAML key path.
+func decodeFile(src *source, rel string, dst any) error {
+	b, err := src.read(rel)
 	if err != nil {
-		return fmt.Errorf("%s: %w", rel, err)
+		return Issue{File: rel, Message: err.Error()}
 	}
 	err = yaml.UnmarshalWithOptions(b, dst, yaml.DisallowUnknownField(), yaml.Strict())
 	if err == nil {
@@ -952,11 +1116,11 @@ func decodeFile(root, rel string, dst any) error {
 	}
 	if errors.As(err, &ye) && ye.GetToken() != nil {
 		if path := keyPath(b, ye.GetToken().Position); path != "" {
-			return fmt.Errorf("%s: %s: %s", rel, path, ye.GetMessage())
+			return Issue{File: rel, Key: path, Message: ye.GetMessage()}
 		}
-		return fmt.Errorf("%s: line %d: %s", rel, ye.GetToken().Position.Line, ye.GetMessage())
+		return Issue{File: rel, Message: fmt.Sprintf("line %d: %s", ye.GetToken().Position.Line, ye.GetMessage())}
 	}
-	return fmt.Errorf("%s: %w", rel, err)
+	return Issue{File: rel, Message: err.Error()}
 }
 
 // keyPath returns the YAML path (without the leading "$.") of the node at pos.

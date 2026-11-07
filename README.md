@@ -78,6 +78,8 @@ The daemon serves these; every response carries `Access-Control-Allow-Origin: *`
 | `POST /v1/events` `{issue,event,action}` | `202`; the issue is re-read and the queue recomputed | `400 invalid_request` (issue not `<pm repo>#n`) |
 | `GET /v1/sessions?limit=n` (default 100) | `[{"id","kind","label","model","startedAt","endedAt","state":"running\|done\|failed","error","ref","parent"}]`, newest first | `400 invalid_request` |
 | `GET /v1/sessions/{id}/log` | the session file, `application/x-ndjson` | `404 unknown_session` |
+| `GET /v1/config` | `{"loadedAt","files":[{"path","sha"}]}`: every file the daemon loaded, `path` relative to the config root, `sha` the git blob sha (what `git hash-object` prints for the file), sorted by `path`; contents are not returned | — |
+| `POST /v1/config/check` `{"files":{"<path>":"<content>"}}` | `{"ok":true}`, or `{"ok":false,"errors":[{"file","key","message"}]}` with the errors of the startup load of exactly these files; a file not in `files` does not exist; the disk and the running configuration are not read or changed | `400 invalid_request` (body not an object, or no `files`) |
 
 The app serves only `POST /webhook`: `401` for a missing or wrong signature, `200` for `ping`, `202` otherwise (forwarded or not), `502` when the daemon does not accept the forward, `413` above 25 MiB.
 
