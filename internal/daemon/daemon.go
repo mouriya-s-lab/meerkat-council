@@ -38,10 +38,14 @@ type Panels interface {
 	Run(ctx context.Context, j panel.Job)
 }
 
-// record is one PM-repository issue in the Project as last read from GitHub.
+// record is one PM-repository issue in the Project as last read from GitHub. updatedAt is the
+// issue's updatedAt at the time of its last read: an unchanged value on a later ProjectItems
+// means the comments and the issue state are still the ones this record carries (it changes on
+// new and edited comments, close and reopen, not on Project field writes).
 type record struct {
-	itemID string
-	issue  queue.Issue
+	itemID    string
+	updatedAt time.Time
+	issue     queue.Issue
 }
 
 // livePanel is a panel goroutine started by this daemon. done is closed when it has ended,
@@ -269,15 +273,24 @@ func (d *Daemon) start(ctx context.Context, r record, start queue.Start, humans 
 	}()
 }
 
-// rebuild re-reads every PM-repository issue in the Project.
+// rebuild re-reads the Project and, from the issue's updatedAt, keeps every record whose issue's
+// comments and state have not changed on GitHub since the last read: the REST reads
+// (IssueComments, BlockedBy) run only for issues whose updatedAt moved or that the copy has not
+// seen yet. The Project fields (Kind, Status, Agenda) and Closed always come from the fresh
+// ProjectItems: a field or close-state write does not move the issue's updatedAt.
 func (d *Daemon) rebuild(ctx context.Context) error {
 	items, err := d.gh.ProjectItems(ctx, d.project.ID)
 	if err != nil {
 		return err
 	}
-	records := map[int]record{}
+	records := make(map[int]record, len(items))
+	reread := 0
 	for _, it := range items {
 		if !strings.EqualFold(it.Repo, d.cfg.Repos.PM.Repo) {
+			continue
+		}
+		if r, ok := d.reuse(it); ok {
+			records[it.Number] = r
 			continue
 		}
 		r, err := d.read(ctx, it)
@@ -285,9 +298,36 @@ func (d *Daemon) rebuild(ctx context.Context) error {
 			return err
 		}
 		records[it.Number] = r
+		reread++
 	}
 	d.records = records
+	slog.Info("full rebuild", "issues", len(records), "reread", reread)
 	return nil
+}
+
+// reuse reports whether the issue has not changed since its last read and the existing record is
+// fit to keep as is (kind, status, agenda and close state patched from the fresh item).
+func (d *Daemon) reuse(it github.Item) (record, bool) {
+	prev, ok := d.records[it.Number]
+	if !ok || !it.UpdatedAt.Equal(prev.updatedAt) {
+		return record{}, false
+	}
+	return d.patchedRecord(prev, it), true
+}
+
+// patchedRecord copies prev and stamps what ProjectItems already knows onto the copy. The issue's
+// field values are the Project's; a field write does not move the issue's updatedAt.
+func (d *Daemon) patchedRecord(prev record, it github.Item) record {
+	p := d.cfg.Project.Fields
+	r := prev // a value copy: the record handed out keeps the previous snapshot
+	r.itemID = it.ID
+	r.updatedAt = it.UpdatedAt
+	r.issue.Kind = kindOf(p.Kind.Options, it.Fields[p.Kind.Name])
+	r.issue.Status = statusOf(p.Status.Options, it.Fields[p.Status.Name])
+	r.issue.StatusName = it.Fields[p.Status.Name]
+	r.issue.Agenda = it.Fields[p.Agenda.Name]
+	r.issue.Closed = it.Closed
+	return r
 }
 
 // refresh re-reads one issue; an issue no longer in the Project leaves the copy.
@@ -351,7 +391,7 @@ func (d *Daemon) read(ctx context.Context, it github.Item) (record, error) {
 	for _, b := range blockers {
 		is.BlockedBy = append(is.BlockedBy, queue.FormatRef(b.Repo, b.Number))
 	}
-	return record{itemID: it.ID, issue: is}, nil
+	return record{itemID: it.ID, updatedAt: it.UpdatedAt, issue: is}, nil
 }
 
 func kindOf(o config.KindOptions, name string) queue.Kind {
