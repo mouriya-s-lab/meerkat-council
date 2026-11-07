@@ -47,6 +47,11 @@ type Tally interface {
 // ErrInterrupted is the cancel cause the daemon gives a panel it stops for a human issue.
 var ErrInterrupted = errors.New("interrupted for a human issue")
 
+// ErrLeftDeliberation is the cancel cause the daemon gives a panel whose issue was closed or set
+// to done or superseded before it carried a pm:decision. The panel is not resumed, so it posts
+// nothing.
+var ErrLeftDeliberation = errors.New("the issue left deliberation")
+
 // HumanIssue is a human issue of the snapshot the panel was started from.
 type HumanIssue struct {
 	Ref     queue.Ref `json:"ref"`
@@ -139,7 +144,8 @@ func Derive(ms []markers.Marker, voters []string) Step {
 }
 
 // Run runs the panel until its decision is published, it fails or ctx ends. A failure is posted
-// as pm:panel failed; cancellation with cause ErrInterrupted as pm:panel interrupted; a daemon stop
+// as pm:panel failed; cancellation with cause ErrInterrupted as pm:panel interrupted;
+// cancellation with cause ErrLeftDeliberation only logs the killed sessions; a daemon stop
 // (cause sessions.ErrShutdown) posts nothing. The sessions it kills are recorded by sessions.Registry.
 func (r *Runner) Run(ctx context.Context, j Job) {
 	repo, n, ok := queue.ParseRef(string(j.Ref))
@@ -153,6 +159,10 @@ func (r *Runner) Run(ctx context.Context, j Job) {
 		return
 	}
 	cause := context.Cause(ctx)
+	if errors.Is(cause, ErrLeftDeliberation) {
+		slog.Info("panel stopped: the issue left deliberation", "issue", j.Ref, "killed", open)
+		return
+	}
 	pm, post := endMarker(cause, err, round, open)
 	if !post {
 		slog.Info("panel stopped with the daemon", "issue", j.Ref, "err", err)

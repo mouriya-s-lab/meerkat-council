@@ -59,6 +59,7 @@ const (
 type Issue struct {
 	Ref    Ref
 	Number int
+	Closed bool
 	Kind   Kind
 	Status Status
 	// StatusName is the GitHub option name of Status; empty when unset.
@@ -71,6 +72,17 @@ type Issue struct {
 	// PanelAt is the creation time of the comment holding the latest pm:panel marker; zero
 	// without one.
 	PanelAt time.Time
+}
+
+// LeftDeliberation reports whether the issue can no longer be deliberated: it is closed, or its
+// Status is the done or superseded option, and it carries no pm:decision. A live panel of such an
+// issue is stopped. An issue with a pm:decision is being published by its own panel, which closes
+// it and then sets Status=Done; stopping that panel would leave the publish unfinished.
+func (is Issue) LeftDeliberation() bool {
+	if hasKind(is.Markers, markers.KindDecision) {
+		return false
+	}
+	return is.Closed || is.Status == StatusDone || is.Status == StatusSuperseded
 }
 
 // Seat is what the queue needs to know about a council seat.
@@ -110,6 +122,10 @@ type Entry struct {
 	State     State    `json:"state"`
 	Notes     []string `json:"notes"`
 	Panel     *Panel   `json:"panel"`
+	// Closed is whether the issue is closed. A closed issue is never convened or resumed, except a
+	// decided one whose publish is unfinished, and a closed human issue neither holds nor blocks
+	// another issue; its own state is derived as for an open one.
+	Closed bool `json:"closed"`
 
 	human   bool
 	number  int // agenda number, 0 when absent or of another prefix
@@ -145,7 +161,7 @@ func Build(s Snapshot) Queue {
 	}
 	humanPending := false
 	for _, is := range s.Issues {
-		if is.Kind == KindHuman && !decided(is) {
+		if is.Kind == KindHuman && !decided(is) && !is.Closed {
 			humanPending = true
 		}
 	}
@@ -163,6 +179,7 @@ func Build(s Snapshot) Queue {
 			number:    AgendaNumber(s.AgendaPrefix, is.Agenda),
 			issue:     is.Number,
 			panelAt:   is.PanelAt,
+			Closed:    is.Closed,
 		}
 		if e.human {
 			e.Kind = kindHuman
@@ -181,7 +198,8 @@ func Build(s Snapshot) Queue {
 				continue
 			}
 			e.BlockedBy = append(e.BlockedBy, p)
-			if !decided(*pre) {
+			// A closed prerequisite counts as resolved, as GitHub treats a closed blocker.
+			if !pre.Closed && !decided(*pre) {
 				waiting = true
 			}
 		}
@@ -300,9 +318,9 @@ func AgendaNumber(prefix, agenda string) int {
 // Human reports whether the entry is a human issue.
 func (e Entry) Human() bool { return e.human }
 
-// HumanPending reports whether some human issue on the queue is not decided.
+// HumanPending reports whether some open human issue on the queue is not decided.
 func HumanPending(q Queue) bool {
-	return slices.ContainsFunc(q, func(e Entry) bool { return e.human && e.State != StateDecided })
+	return slices.ContainsFunc(q, func(e Entry) bool { return e.human && !e.Closed && e.State != StateDecided })
 }
 
 // Start is how a panel is started for an issue.
@@ -335,11 +353,13 @@ type Candidate struct {
 // resumeBefore, so a panel that failed or was left in this daemon process is never restarted by
 // it; decided ones whose decision is not fully published are resumed on every full rebuild. The
 // daemon passes its start time on full rebuilds and the zero time, which resumes none of them, on
-// single-issue refreshes. Superseded, held and blocked issues are never candidates.
+// single-issue refreshes. Closed issues are never candidates except a decided one whose publish is
+// unfinished: the publish closes the issue before its last write, Status=Done. Superseded, held
+// and blocked issues are never candidates.
 func Candidates(q Queue, live map[Ref]bool, resumeBefore time.Time) []Candidate {
 	var out []Candidate
 	for _, e := range q {
-		if live[e.Ref] {
+		if live[e.Ref] || (e.Closed && !(e.State == StateDecided && e.unpublished)) {
 			continue
 		}
 		switch e.State {

@@ -195,25 +195,33 @@ func (d *Daemon) refreshDecided(ctx context.Context, number int) error {
 	return nil
 }
 
-// schedule applies the panel rule after a published queue: while a human issue is undecided,
-// interrupt every live panel of a non-human issue and wait until each has posted; then start
-// panels for the queue's candidates (queue.Candidates with resumeBefore) up to
+// schedule applies the panel rule after a published queue: stop the live panel of every issue
+// that left deliberation (closed, done or superseded, and without a pm:decision the panel is
+// publishing); while a human issue is undecided,
+// interrupt every other live panel of a non-human issue; wait until each stopped panel has ended;
+// then start panels for the queue's candidates (queue.Candidates with resumeBefore) up to
 // maxConcurrentPanels.
 func (d *Daemon) schedule(ctx context.Context, resumeBefore time.Time) {
 	q := d.Queue()
-	if queue.HumanPending(q) {
-		var stopped []*livePanel
-		for n, lp := range d.live {
-			if !lp.human {
-				slog.Info("interrupting panel for a human issue", "issue", lp.ref)
-				lp.cancel(panel.ErrInterrupted)
-				stopped = append(stopped, lp)
-				delete(d.live, n)
-			}
+	humanPending := queue.HumanPending(q)
+	var stopped []*livePanel
+	for n, lp := range d.live {
+		r, known := d.records[n]
+		switch {
+		case known && r.issue.LeftDeliberation():
+			slog.Info("stopping panel: the issue left deliberation", "issue", lp.ref, "closed", r.issue.Closed, "status", r.issue.StatusName)
+			lp.cancel(panel.ErrLeftDeliberation)
+		case humanPending && !lp.human:
+			slog.Info("interrupting panel for a human issue", "issue", lp.ref)
+			lp.cancel(panel.ErrInterrupted)
+		default:
+			continue
 		}
-		for _, lp := range stopped {
-			<-lp.done
-		}
+		stopped = append(stopped, lp)
+		delete(d.live, n)
+	}
+	for _, lp := range stopped {
+		<-lp.done
 	}
 	live := map[queue.Ref]bool{}
 	for _, lp := range d.live {
@@ -313,6 +321,7 @@ func (d *Daemon) read(ctx context.Context, it github.Item) (record, error) {
 		Status:     statusOf(p.Status.Options, it.Fields[p.Status.Name]),
 		StatusName: it.Fields[p.Status.Name],
 		Agenda:     it.Fields[p.Agenda.Name],
+		Closed:     it.Closed,
 	}
 	if is.Kind == queue.KindNone {
 		slog.Info("issue has no Kind; not on the agenda", "issue", ref, "field", p.Kind.Name, "value", it.Fields[p.Kind.Name])
