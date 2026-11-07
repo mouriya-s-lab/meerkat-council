@@ -289,7 +289,7 @@ func (p *run) decide(ctx context.Context, st Step, is issue, forks []markers.Pan
 		}
 	}
 	if posted != nil {
-		return true, nil, p.publish(ctx, st, posted.Rows)
+		return true, nil, p.publish(ctx, st, posted.Rows, true)
 	}
 	var humans []string
 	for _, h := range p.job.HumanIssues {
@@ -306,17 +306,18 @@ func (p *run) decide(ctx context.Context, st Step, is issue, forks []markers.Pan
 		started := markers.Panel{Event: markers.PanelStarted, Round: round, Sessions: []markers.PanelSession{}}
 		return false, nil, p.postPanel(ctx, started, fmt.Sprintf("小组开始第 %d 轮审议：修订决策表第 %d 版的反例（%s）。", round, st.Version, strings.Join(o.Rows, "、")))
 	case tally.Decide:
-		return true, nil, p.publish(ctx, st, o.Rows)
+		return true, nil, p.publish(ctx, st, o.Rows, false)
 	default:
 		panic(fmt.Sprintf("unknown tally outcome %T", o))
 	}
 }
 
-// publish publishes the decision of st's draft. An interrupt that arrives before the publish
-// starts stops the panel; one that arrives during it does not, so a human panel never starts
-// beside a half-published decision. The daemon stopping stops it either way.
-func (p *run) publish(ctx context.Context, st Step, rows []markers.DecisionRow) error {
-	if ctx.Err() != nil {
+// publish publishes the decision of st's draft. An interrupt stops the panel only before the
+// first publish starts; once it has started, or when the decision is already posted (the issue
+// is decided and its publish is being finished), the publish runs to its end, so a human panel
+// never starts beside a half-published decision. The daemon stopping stops it either way.
+func (p *run) publish(ctx context.Context, st Step, rows []markers.DecisionRow, posted bool) error {
+	if ctx.Err() != nil && (!posted || !errors.Is(context.Cause(ctx), ErrInterrupted)) {
 		return context.Cause(ctx)
 	}
 	pctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
