@@ -34,7 +34,7 @@ func TestShutdownRecordIsReadBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	cancelAt := time.Date(2026, 11, 7, 9, 0, 0, 0, time.UTC)
-	if err := RecordFailure(file, shutdownReason, cancelAt); err != nil {
+	if err := RecordFailure(file, failureRecord{Reason: shutdownReason, At: cancelAt}); err != nil {
 		t.Fatal(err)
 	}
 	f, err := ParseFile(file)

@@ -49,7 +49,7 @@ func TestList(t *testing.T) {
 		}
 	}
 	failedAt := time.Date(2026, 11, 6, 22, 0, 5, 5e6, time.UTC)
-	if err := RecordFailure(filepath.Join(dir, "2", "failed.jsonl"), "omp exited", failedAt); err != nil {
+	if err := RecordFailure(filepath.Join(dir, "2", "failed.jsonl"), failureRecord{Reason: "omp exited", At: failedAt}); err != nil {
 		t.Fatal(err)
 	}
 	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"pm_draft"}}, Vote: config.Goal{GoalTools: []string{"pm_vote"}}}
@@ -115,7 +115,7 @@ func TestListDerivesState(t *testing.T) {
 	}
 	failedFile := filepath.Join(dir, "2", "failed.jsonl")
 	failedAt := time.Date(2026, 11, 6, 22, 0, 5, 5e6, time.UTC)
-	if err := RecordFailure(failedFile, "omp exited", failedAt); err != nil {
+	if err := RecordFailure(failedFile, failureRecord{Reason: "omp exited", At: failedAt}); err != nil {
 		t.Fatal(err)
 	}
 	if b, err := os.ReadFile(FailurePath(failedFile)); err != nil || string(b) != `{"reason":"omp exited","at":"2026-11-06T22:00:05.005Z"}` {
@@ -137,5 +137,111 @@ func TestListDerivesState(t *testing.T) {
 	doneAt := time.Date(2026, 11, 6, 21, 30, 17, 0, time.UTC)
 	if d.ID != "s-done" || d.State != StateDone || d.EndedAt == nil || !d.EndedAt.Equal(doneAt) {
 		t.Errorf("done = %+v", d)
+	}
+}
+
+// A failure record without its session file lists from the record alone: the session id it
+// names reports failed with the kind, seat, ref, model, start, end and error from the record.
+func TestListOrphanFailureRecord(t *testing.T) {
+	dir := t.TempDir()
+	started := time.Date(2026, 11, 6, 22, 0, 0, 0, time.UTC)
+	failedAt := time.Date(2026, 11, 6, 22, 0, 5, 0, time.UTC)
+	file := filepath.Join(dir, "3", "voted.jsonl")
+	if err := RecordFailure(file, failureRecord{
+		Reason: "context canceled", At: failedAt, ID: "s-orphan",
+		Kind: config.KindVote, Seat: "Argon", Ref: "o/pm#7", Model: "m/a", StartedAt: started,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	goals := config.Goals{Vote: config.Goal{GoalTools: []string{"pm_vote"}}}
+	list, err := NewRegistry().List(dir, goals, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("list = %+v", list)
+	}
+	s := list[0]
+	if s.ID != "s-orphan" || s.State != StateFailed || s.Kind != config.KindVote || s.Model != "m/a" ||
+		s.StartedAt.IsZero() || !s.StartedAt.Equal(started) ||
+		s.EndedAt == nil || !s.EndedAt.Equal(failedAt) ||
+		s.Error == nil || *s.Error != "context canceled" ||
+		s.Ref == nil || *s.Ref != "o/pm#7" || s.Label != "vote Argon o/pm#7" {
+		t.Errorf("orphan = %+v", s)
+	}
+}
+
+// A failure record beside its session file does not add a second row, and the .jsonl's own
+// pm-meta still wins over the record: the listing keeps the behavior it had before.
+func TestListFailureRecordWithSessionFile(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "2", "failed.jsonl")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(failed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	failedAt := time.Date(2026, 11, 6, 22, 0, 5, 5e6, time.UTC)
+	if err := RecordFailure(p, failureRecord{
+		Reason: "omp exited", At: failedAt, ID: "s-wrong",
+		Kind: config.KindVote, Seat: "Argon", Ref: "o/pm#9", Model: "m/other", StartedAt: failedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"pm_draft"}}, Vote: config.Goal{GoalTools: []string{"pm_vote"}}}
+	list, err := NewRegistry().List(dir, goals, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("list = %+v", list)
+	}
+	s := list[0]
+	if s.ID != "s-failed" || s.State != StateFailed || s.Kind != config.KindDraft ||
+		s.Label != "draft Coordination o/pm#2" || s.Model != "m/a" ||
+		s.Error == nil || *s.Error != "omp exited" ||
+		s.Ref == nil || *s.Ref != "o/pm#2" ||
+		s.EndedAt == nil || !s.EndedAt.Equal(failedAt) {
+		t.Errorf("both present = %+v", s)
+	}
+}
+
+// An old-format record (reason and at only) beside its session file still reads, and alone
+// it names no session, so it adds no row.
+func TestListOldFormatFailureRecord(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "2", "failed.jsonl")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(failed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"reason":"omp exited","at":"2026-11-06T22:00:05.005Z"}`
+	if err := os.WriteFile(FailurePath(p), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"pm_draft"}}}
+	list, err := NewRegistry().List(dir, goals, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != "s-failed" || list[0].State != StateFailed ||
+		list[0].Kind != config.KindDraft || list[0].Error == nil || *list[0].Error != "omp exited" {
+		t.Fatalf("old format with file = %+v", list)
+	}
+
+	oldDir := t.TempDir()
+	oldFile := filepath.Join(oldDir, "gone.jsonl")
+	if err := os.WriteFile(FailurePath(oldFile), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list, err = NewRegistry().List(oldDir, goals, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("old format orphan = %+v", list)
 	}
 }
