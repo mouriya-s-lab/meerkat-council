@@ -18,6 +18,7 @@
  */
 import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { checkDeliver, emptyDeliverFields, type DeliverCheck } from "./validate.ts";
 
 type Content = "code" | "design" | "omp";
 
@@ -188,7 +189,10 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 			tradeoff: z.string(),
 			category: z.string().describe(`One of: ${categories}`),
 			missingDesign: z.boolean(),
-			deliver: deliver.nullable().describe(`Implementation issue to create in one of ${ctx.repos.code.join(", ") || "no repository"}, or null`),
+			deliver: deliver
+				.nullable()
+				.optional()
+				.describe(`Implementation issue to create in one of ${ctx.repos.code.join(", ") || "no repository"}; omit this field (do not pass a key at all) when the row has no implementation issue`),
 		});
 		pi.registerTool({
 			name: "pm_draft",
@@ -213,13 +217,17 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 				if (params.withdrawn !== null && params.withdrawn.trim() === "") throw new Error("withdrawn is an empty reason; give the reason or null");
 				if (params.rows.length === 0 && params.withdrawn === null) throw new Error("rows is empty and withdrawn is null");
 				const ids = new Set<string>();
+				const code: DeliverCheck = { repos: ctx.repos.code };
 				for (const [i, r] of params.rows.entries()) {
 					if (r.id.trim() === "") throw new Error(`rows[${i}].id is empty`);
 					if (ids.has(r.id)) throw new Error(`rows[${i}].id ${r.id} is used twice`);
 					ids.add(r.id);
 					if (!ctx.categories.includes(r.category)) throw new Error(`rows[${i}] (${r.id}): category ${r.category} is not one of: ${categories}`);
-					if (r.deliver && !ctx.repos.code.some(c => sameRef(c, r.deliver?.repo ?? ""))) {
-						throw new Error(`rows[${i}] (${r.id}): deliver.repo ${r.deliver.repo} is not a code repository: [${ctx.repos.code.join(", ")}]`);
+					if (r.deliver !== undefined && r.deliver !== null) {
+						const empties = emptyDeliverFields(r.deliver.repo, r.deliver.title, r.deliver.body);
+						if (empties.length > 0) throw new Error(`rows[${i}] (${r.id}): deliver.${empties.join(", deliver.")} must be non-blank; omit deliver entirely (no key) for a row with no implementation issue`);
+						const notAllowed = checkDeliver(code, r.id, r.deliver);
+						if (notAllowed !== null) throw new Error(notAllowed);
 					}
 				}
 				if (ctx.escalation && params.settle === null) {

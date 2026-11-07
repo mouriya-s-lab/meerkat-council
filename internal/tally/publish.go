@@ -67,6 +67,11 @@ func (pb *publish) run(ctx context.Context) error {
 		rows = dec.Rows
 	}
 	deliver := passedDeliverRows(pb.p.Draft, rows)
+	for _, r := range deliver {
+		if err := checkDeliver(r, pb.cfg.Repos.Code); err != nil {
+			return err
+		}
+	}
 	replacement := pb.replacement(deliver)
 
 	if !found {
@@ -121,6 +126,25 @@ func passedDeliverRows(d markers.Draft, rows []markers.DecisionRow) []markers.Ro
 		}
 	}
 	return out
+}
+
+// checkDeliver rejects a delivered row whose deliver is unusable for issue creation: the rule
+// pm_draft enforces on submission, applied to every row the publish would turn into an issue. The
+// error names the row and the field, so the panel fails before any GitHub write.
+func checkDeliver(r markers.Row, repos []config.CodeRepo) error {
+	fields := []struct {
+		name  string
+		value string
+	}{{"deliver.repo", r.Deliver.Repo}, {"deliver.title", r.Deliver.Title}, {"deliver.body", r.Deliver.Body}}
+	for _, f := range fields {
+		if strings.TrimSpace(f.value) == "" {
+			return fmt.Errorf("row %s: %s is blank; a delivered row needs a non-blank repo, title and body", r.ID, f.name)
+		}
+	}
+	if !slices.ContainsFunc(repos, func(c config.CodeRepo) bool { return strings.EqualFold(c.Repo, r.Deliver.Repo) }) {
+		return fmt.Errorf("row %s: %s %s is not a code repository of shared/repos.yaml", r.ID, "deliver.repo", r.Deliver.Repo)
+	}
+	return nil
 }
 
 // replacement is the index in deliver of the row whose issue replaces the escalated

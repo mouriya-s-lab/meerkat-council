@@ -518,3 +518,55 @@ func TestPublishWithdrawnReply(t *testing.T) {
 		t.Errorf("archived without archive config")
 	}
 }
+
+// TestPublishBlankDeliverField: a passed row whose deliver has a blank title fails the publish
+// with an error naming the row and the field, before any GitHub write; an earlier valid row's
+// issue must not exist either.
+func TestPublishBlankDeliverField(t *testing.T) {
+	cfg := loadConfig(t)
+	p, fields, options := testProject(cfg)
+	fo := cfg.Project.Fields
+	draft := markers.Draft{
+		Version: 1,
+		Rows: []markers.Row{
+			{ID: "D5-01", What: "fine", Where: "x", How: "y", Tradeoff: "z", Category: "c", Deliver: &markers.Deliver{Repo: codeRepo, Title: "fine", Body: "b"}},
+			{ID: "D5-02", What: "blank", Where: "x", How: "y", Tradeoff: "z", Category: "c", Deliver: &markers.Deliver{Repo: codeRepo, Title: "  ", Body: "b"}},
+		},
+		Supersedes: []string{},
+	}
+	vote := markers.Vote{Seat: "Argon", Version: 1, Rows: []markers.VoteRow{{Row: "D5-01", Choice: markers.ChoiceApprove}, {Row: "D5-02", Choice: markers.ChoiceApprove}}}
+	gh := &fakeGitHub{
+		budget: -1, project: p, fields: fields, options: options, files: map[string]string{},
+		issues: map[string]*fakeIssue{
+			key(pmRepo, 5): {repo: pmRepo, number: 5, title: "agenda", body: "needs work", itemID: "item-5",
+				item:     map[string]string{fo.Kind.Name: fo.Kind.Options.Agenda, fo.Status.Name: fo.Status.Options.InProgress},
+				comments: []string{mustComment(t, "draft", draft), mustComment(t, "vote", vote)}},
+		},
+	}
+	rows := []markers.DecisionRow{
+		{Row: "D5-01", Outcome: markers.OutcomePassed, Approve: 4, Threshold: 3, Reason: "approve 4 meets threshold 3"},
+		{Row: "D5-02", Outcome: markers.OutcomePassed, Approve: 4, Threshold: 3, Reason: "approve 4 meets threshold 3"},
+	}
+	pub := Publication{Ref: queue.Ref(pmRepo + "#5"), Agenda: "D5", Draft: draft, Rows: rows}
+	tl := New(cfg, gh, gh.project)
+	err := tl.Publish(context.Background(), pub)
+	if err == nil {
+		t.Fatal("publish succeeded with a blank deliver.title")
+	}
+	if !strings.Contains(err.Error(), "D5-02") || !strings.Contains(err.Error(), "deliver.title") {
+		t.Errorf("error %q does not name the row and the field", err.Error())
+	}
+	before := gh.state()
+	if gh.issues[key(codeRepo, 1)] != nil {
+		t.Error("the earlier valid row created an implementation issue before the failure")
+	}
+	if len(markersOf(t, gh.issues[key(pmRepo, 5)].comments)) != 2 {
+		t.Error("the failed publish wrote a marker")
+	}
+	if err := tl.Publish(context.Background(), pub); err == nil || !strings.Contains(err.Error(), "deliver.title") {
+		t.Errorf("a repeat run did not fail the same way: %v", err)
+	}
+	if after := gh.state(); after != before {
+		t.Errorf("the failed runs changed GitHub:\n%s\nvs\n%s", before, after)
+	}
+}
