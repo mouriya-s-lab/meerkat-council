@@ -116,7 +116,7 @@ func runDaemon(ctx context.Context, root string) error {
 		cancel()
 		<-ran
 	}()
-	srv := api.New(d, reg, cfg.Goals, cfg.Repos.PM.Repo, cfg.Runtime.SessionsDir, startedAt)
+	srv := api.New(d, reg, cfg.Goals, cfg.Loaded, cfg.Repos.PM.Repo, cfg.Runtime.SessionsDir, startedAt)
 	slog.Info("daemon listening", "addr", cfg.Runtime.Daemon.Listen, "project", project.ID, "issues", len(d.Queue()))
 	return serve(ctx, cfg.Runtime.Daemon.Listen, srv.Handler())
 }
