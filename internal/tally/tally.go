@@ -18,7 +18,6 @@ import (
 // GitHub is the part of the GitHub client the tally uses.
 type GitHub interface {
 	Issue(ctx context.Context, repo string, number int) (github.Issue, error)
-	Comments(ctx context.Context, repo string, number int) ([]string, error)
 	CommentMarkers(ctx context.Context, repo string, number int, fn func(m markers.Marker) error) error
 	PostComment(ctx context.Context, repo string, number int, body string) (int64, error)
 	EditIssueBody(ctx context.Context, repo string, number int, body string) error

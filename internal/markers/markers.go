@@ -270,11 +270,9 @@ func LastLine(body string) string {
 	return strings.TrimSpace(line)
 }
 
-// ParseLine parses one marker line as produced by Format (or by lastLine). It is
+// ParseLine parses one marker line as produced by Format (or by LastLine). It is
 // the single parser behind Parse: Parse extracts the body's last non-blank line
-// and feeds it here, so there is exactly one marker grammar, not two. The
-// returned Marker keeps no substring of line: strings decoded from the marker
-// JSON are cloned before return.
+// and feeds it here, so there is exactly one marker grammar, not two.
 func ParseLine(line string) (Marker, error) {
 	m := linePattern.FindStringSubmatch(line)
 	if m == nil {
@@ -309,92 +307,8 @@ func ParseLine(line string) (Marker, error) {
 	if err := decode(raw, mk); err != nil {
 		return nil, fmt.Errorf("pm:%s: %w", kind, err)
 	}
-	// Clone every decoded string: raw aliases line, and line may alias a much
-	// larger comment body the caller is about to release. Without this the
-	// Marker would pin the whole body in memory.
-	cloneMarker(mk)
 	// Return the value, not the pointer, so callers switch on value types.
 	return reflect.ValueOf(mk).Elem().Interface().(Marker), nil
-}
-
-// cloneMarker deep-copies every string a marker decoded from its JSON line, so the
-// Marker never aliases (and pins) the comment body the line was cut from.
-func cloneMarker(mk Marker) {
-	cloneStr := func(s string) string { return strings.Clone(s) }
-	cloneOptStr := func(s *string) *string {
-		if s == nil {
-			return nil
-		}
-		c := strings.Clone(*s)
-		return &c
-	}
-	switch m := mk.(type) {
-	case *Panel:
-		for i := range m.Sessions {
-			m.Sessions[i].Seat = cloneStr(m.Sessions[i].Seat)
-			m.Sessions[i].Kind = cloneStr(m.Sessions[i].Kind)
-			m.Sessions[i].Session = cloneStr(m.Sessions[i].Session)
-			m.Sessions[i].File = cloneStr(m.Sessions[i].File)
-		}
-		m.Prereq = cloneOptStr(m.Prereq)
-		m.Error = cloneOptStr(m.Error)
-	case *Draft:
-		for i := range m.Rows {
-			m.Rows[i].ID = cloneStr(m.Rows[i].ID)
-			m.Rows[i].What = cloneStr(m.Rows[i].What)
-			m.Rows[i].Where = cloneStr(m.Rows[i].Where)
-			m.Rows[i].How = cloneStr(m.Rows[i].How)
-			m.Rows[i].Tradeoff = cloneStr(m.Rows[i].Tradeoff)
-			m.Rows[i].Category = cloneStr(m.Rows[i].Category)
-			if d := m.Rows[i].Deliver; d != nil {
-				d.Repo = cloneStr(d.Repo)
-				d.Title = cloneStr(d.Title)
-				d.Body = cloneStr(d.Body)
-			}
-		}
-		for i := range m.Supersedes {
-			m.Supersedes[i] = cloneStr(m.Supersedes[i])
-		}
-		if m.Settle != nil {
-			m.Settle.Text = cloneStr(m.Settle.Text)
-		}
-		m.Withdrawn = cloneOptStr(m.Withdrawn)
-	case *Vote:
-		m.Seat = cloneStr(m.Seat)
-		for i := range m.Rows {
-			m.Rows[i].Row = cloneStr(m.Rows[i].Row)
-			m.Rows[i].Counterexample = cloneOptStr(m.Rows[i].Counterexample)
-			m.Rows[i].Citation = cloneOptStr(m.Rows[i].Citation)
-			m.Rows[i].Classification = cloneOptStr(m.Rows[i].Classification)
-		}
-	case *Ruling:
-		m.Seat = cloneStr(m.Seat)
-		for i := range m.Rows {
-			m.Rows[i].Row = cloneStr(m.Rows[i].Row)
-			m.Rows[i].Category = cloneStr(m.Rows[i].Category)
-		}
-	case *Decision:
-		for i := range m.Rows {
-			m.Rows[i].Row = cloneStr(m.Rows[i].Row)
-			m.Rows[i].Reason = cloneStr(m.Rows[i].Reason)
-		}
-		for i := range m.Impl {
-			m.Impl[i] = cloneStr(m.Impl[i])
-		}
-		for i := range m.Superseded {
-			m.Superseded[i] = cloneStr(m.Superseded[i])
-		}
-	case *Superseded:
-		m.By = cloneStr(m.By)
-	case *Escalation:
-		m.Issue = cloneStr(m.Issue)
-	case *Reply:
-		m.Decision = cloneOptStr(m.Decision)
-	case *Replaced:
-		m.By = cloneStr(m.By)
-	case *Replaces:
-		m.Old = cloneStr(m.Old)
-	}
 }
 
 // Parse returns the marker on the last non-blank line of body. It returns ErrNoMarker when that
@@ -508,24 +422,6 @@ func Comment(text string, m Marker) (string, error) {
 		return "", err
 	}
 	return strings.TrimRight(text, "\n") + "\n\n" + line, nil
-}
-
-// Collect parses the marker of each body, oldest first. Bodies without a marker are skipped;
-// malformed markers are skipped and returned as errors.
-func Collect(bodies []string) ([]Marker, []error) {
-	var ms []Marker
-	var errs []error
-	for _, b := range bodies {
-		m, err := Parse(b)
-		switch {
-		case errors.Is(err, ErrNoMarker):
-		case err != nil:
-			errs = append(errs, err)
-		default:
-			ms = append(ms, m)
-		}
-	}
-	return ms, errs
 }
 
 // LastPanel returns the latest pm:panel marker of ms.

@@ -21,8 +21,6 @@ import (
 
 func stubComments(t *testing.T, bodies []string) (*Client, func()) {
 	t.Helper()
-	page1 := `[{"body":%q,"created_at":"2026-11-07T12:00:01Z"},{"body":%q,"created_at":"2026-11-07T12:00:02Z"}]`
-	_ = page1
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -90,7 +88,7 @@ func TestCommentMarkersSkipsNonMarkers(t *testing.T) {
 	bodies := []string{
 		"plain discussion",
 		"with marker\n\n<!-- pm:superseded {\"v\":1,\"by\":\"o/pm#9\"} -->",
-		"<!-- pm:ask {\"v\":1} -->", // malformed for the council: skipped like Collect
+		"<!-- pm:ask {\"v\":1} -->", // malformed for the council: skipped
 	}
 	c, close := stubComments(t, bodies)
 	defer close()

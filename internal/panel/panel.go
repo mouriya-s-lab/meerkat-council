@@ -34,7 +34,6 @@ import (
 type GitHub interface {
 	Issue(ctx context.Context, repo string, number int) (github.Issue, error)
 	Comment(ctx context.Context, repo string, id int64) (string, error)
-	Comments(ctx context.Context, repo string, number int) ([]string, error)
 	EachComment(ctx context.Context, repo string, number int, fn func(body string, createdAt time.Time) error) error
 	PostComment(ctx context.Context, repo string, number int, body string) (int64, error)
 	SetOption(ctx context.Context, projectID, itemID, fieldID, optionID string) error
@@ -432,8 +431,7 @@ func (p *run) read(ctx context.Context) (issue, error) {
 			is.ask = &config.EscalationData{Issue: e.Issue, Ask: e.Ask, AskText: text}
 		}
 	}
-	// Streams page by page without retaining bodies; malformed markers are
-	// logged exactly as the markers.Collect path did before.
+	// Streams page by page without retaining bodies; malformed markers are logged.
 	if err := p.gh.EachComment(ctx, p.repo, p.number, func(body string, _ time.Time) error {
 		m, err := markers.Parse(body)
 		switch {

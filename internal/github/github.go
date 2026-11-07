@@ -301,27 +301,16 @@ type Comment struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// IssueComments returns the issue's comments, oldest first.
-func (c *Client) IssueComments(ctx context.Context, repo string, number int) ([]Comment, error) {
-	cs, err := pages[Comment](ctx, c.rest, fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", repo, number))
-	if err != nil {
-		return nil, fmt.Errorf("comments of %s#%d: %w", repo, number, err)
-	}
-	return cs, nil
-}
-
 // CommentMarkers calls fn for every council marker of the issue's comments,
 // oldest first, without retaining the comment bodies. Comments without a marker
-// and malformed markers are skipped, exactly as the markers.Collect call sites
-// this replaces did with `ms, _`. PanelAt collection stays with the caller: fn
+// and malformed markers are skipped. PanelAt collection stays with the caller: fn
 // sees only the marker, and the daemon is the one caller that needs the
 // comment's creation time.
 func (c *Client) CommentMarkers(ctx context.Context, repo string, number int, fn func(m markers.Marker) error) error {
 	if err := c.EachComment(ctx, repo, number, func(body string, _ time.Time) error {
 		m, err := markers.ParseLine(markers.LastLine(body))
 		if err != nil {
-			// No marker or a malformed one: skipped, exactly as the
-			// markers.Collect call sites this replaces did with `ms, _`.
+			// No marker or a malformed one: skipped.
 			return nil
 		}
 		return fn(m)
@@ -329,21 +318,6 @@ func (c *Client) CommentMarkers(ctx context.Context, repo string, number int, fn
 		return fmt.Errorf("markers of %s#%d: %w", repo, number, err)
 	}
 	return nil
-}
-
-// Comments returns the bodies of the issue's comments, oldest first. Only the
-// plugin's pm_read_issue path uses it (single-issue reads outside the rebuild
-// hot path); the rebuild and tally/panel marker paths stream instead.
-func (c *Client) Comments(ctx context.Context, repo string, number int) ([]string, error) {
-	cs, err := c.IssueComments(ctx, repo, number)
-	if err != nil {
-		return nil, err
-	}
-	bodies := make([]string, len(cs))
-	for i, c := range cs {
-		bodies[i] = c.Body
-	}
-	return bodies, nil
 }
 
 // IssueRef names an issue by repository and number.
