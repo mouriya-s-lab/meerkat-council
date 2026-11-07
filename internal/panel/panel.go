@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -578,6 +579,26 @@ func (p *run) recordVote(ctx context.Context, st Step, seat string, res sessions
 	return p.tally.RecordVote(ctx, p.job.Ref, seat, st.Version, a.Rows)
 }
 
+// forkFile returns the session file to fork from for kind and seat, or "" to start a fresh
+// session. A fork entry whose file no longer exists (the killed session never wrote it before
+// it was interrupted) starts fresh: there is no context to inherit, so its path must not
+// reach --fork. Only a missing file goes fresh; any other stat error keeps the fork so the
+// failure stays visible. The missing-file case logs one line here; callers log nothing for "".
+func (p *run) forkFile(kind config.SessionKind, seat string, fork *markers.PanelSession) string {
+	if fork == nil || fork.File == "" {
+		return ""
+	}
+	if _, err := os.Stat(fork.File); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return fork.File
+		}
+		slog.Warn("session fork source missing, starting a fresh session",
+			"issue", p.job.Ref, "kind", kind, "seat", seat, "fork", fork.File, "err", err)
+		return ""
+	}
+	return fork.File
+}
+
 // fork returns the killed session of kind and seat to fork, or nil.
 func fork(forks []markers.PanelSession, kind config.SessionKind, seat string) *markers.PanelSession {
 	i := slices.IndexFunc(forks, func(s markers.PanelSession) bool { return s.Kind == string(kind) && s.Seat == seat })
@@ -655,7 +676,9 @@ func (p *run) session(ctx context.Context, kind config.SessionKind, seat config.
 	}
 	render, forkFile := goal.RenderOpening, ""
 	if fork != nil {
-		render, forkFile = goal.RenderResume, fork.File
+		if forkFile = p.forkFile(kind, seat.ID, fork); forkFile != "" {
+			render = goal.RenderResume
+		}
 	}
 	opening, err := render(data)
 	if err != nil {
