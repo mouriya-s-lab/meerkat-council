@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/oh-my-omp/pm-council/internal/api"
+	"github.com/mouriya-s-lab/meerkat-council/internal/api"
 )
 
 var secret = []byte("s3cret")

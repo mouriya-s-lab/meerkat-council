@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oh-my-omp/pm-council/internal/api"
-	"github.com/oh-my-omp/pm-council/internal/queue"
+	"github.com/mouriya-s-lab/meerkat-council/internal/api"
+	"github.com/mouriya-s-lab/meerkat-council/internal/queue"
 )
 
 // MaxBody is the largest webhook body accepted (GitHub caps payloads at 25 MiB).

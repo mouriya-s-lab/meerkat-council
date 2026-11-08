@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oh-my-omp/pm-council/internal/markers"
+	"github.com/mouriya-s-lab/meerkat-council/internal/markers"
 )
 
 const repo = "o/pm"

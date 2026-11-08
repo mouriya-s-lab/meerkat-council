@@ -1,23 +1,23 @@
-# pm-council
+# meerkat-council
 
 Pepgent PM council: a Go program that keeps the agenda queue of the PM repository and convenes a fresh headless omp panel per agenda issue, plus its TypeScript omp plugin (`plugin/`). One binary, two subcommands:
 
-- `pm-council app` is the council webhook endpoint. It verifies each webhook delivery (`X-Hub-Signature-256`) and, for `issues`, `issue_comment`, `sub_issues` and `issue_dependencies` events of the PM repository, wakes the daemon with `POST /v1/events {"issue":"owner/repo#n","event","action"}`. It keeps no state and needs no `GH_TOKEN`.
-- `pm-council daemon` rebuilds the queue from GitHub: at startup and every `daemon.rebuildIntervalSeconds` from every PM-repository issue in the Project, on each event from that one issue, and when a panel ends from its issue and the issues its `pm:decision` superseded. Issue fields come from the Project, prerequisites from the issue's "Blocked by" relations, panel progress from the `pm:` markers in its comments. A scheduled rebuild keeps the comments and Blocked-by relations of every issue whose GitHub `updatedAt` has not moved since the last rebuild (a Project field write does not move it) and re-reads only the changed ones; the startup rebuild and every event refresh read in full. Its `full rebuild` log line counts `issues=<PM issues in the Project> reread=<issues read again>`. It admits each human or agenda issue without an `Agenda` number (next `<prefix><n>`; `Status=Todo` only when the issue has no `Status`, an existing one is kept), serves the queue, and starts, interrupts and resumes panels, which run to the tally and publish their decision (below). Issue state lives only on GitHub; the daemon's copy is replaced by every rebuild. The live panels are the daemon's own processes.
+- `meerkat-council app` is the council webhook endpoint. It verifies each webhook delivery (`X-Hub-Signature-256`) and, for `issues`, `issue_comment`, `sub_issues` and `issue_dependencies` events of the PM repository, wakes the daemon with `POST /v1/events {"issue":"owner/repo#n","event","action"}`. It keeps no state and needs no `GH_TOKEN`.
+- `meerkat-council daemon` rebuilds the queue from GitHub: at startup and every `daemon.rebuildIntervalSeconds` from every PM-repository issue in the Project, on each event from that one issue, and when a panel ends from its issue and the issues its `pm:decision` superseded. Issue fields come from the Project, prerequisites from the issue's "Blocked by" relations, panel progress from the `pm:` markers in its comments. A scheduled rebuild keeps the comments and Blocked-by relations of every issue whose GitHub `updatedAt` has not moved since the last rebuild (a Project field write does not move it) and re-reads only the changed ones; the startup rebuild and every event refresh read in full. Its `full rebuild` log line counts `issues=<PM issues in the Project> reread=<issues read again>`. It admits each human or agenda issue without an `Agenda` number (next `<prefix><n>`; `Status=Todo` only when the issue has no `Status`, an existing one is kept), serves the queue, and starts, interrupts and resumes panels, which run to the tally and publish their decision (below). Issue state lives only on GitHub; the daemon's copy is replaced by every rebuild. The live panels are the daemon's own processes.
 
 ## Run locally
 
-Requires Go, `yq` (mikefarah v4), omp, `gh` logged in (the daemon reads `GH_TOKEN`; locally its value is the output of `gh auth token`) and a running pm-guardians (`guardiansURL`) whose `bases.yaml` has a base for every model named in `council/proxy-readers.yaml`; that is a deployment check, the council does not verify it.
+Requires Go, `yq` (mikefarah v4), omp, `gh` logged in (the daemon reads `GH_TOKEN`; locally its value is the output of `gh auth token`) and a running meerkat-guardians (`guardiansURL`) whose `bases.yaml` has a base for every model named in `council/proxy-readers.yaml`; that is a deployment check, the council does not verify it.
 
 ```sh
-mkdir -p /Users/mouriya/Ext/work/pm-council-local
-cp -R config.example /Users/mouriya/Ext/work/pm-council-local/config   # then edit paths if needed
-scripts/prepare-omp-dir.sh /Users/mouriya/Ext/work/pm-council-local/config
-openssl rand -hex 32 > /Users/mouriya/Ext/work/pm-council-local/webhook-secret
-chmod 600 /Users/mouriya/Ext/work/pm-council-local/webhook-secret
+mkdir -p /Users/mouriya/Ext/work/meerkat-council-local
+cp -R config.example /Users/mouriya/Ext/work/meerkat-council-local/config   # then edit paths if needed
+scripts/prepare-omp-dir.sh /Users/mouriya/Ext/work/meerkat-council-local/config
+openssl rand -hex 32 > /Users/mouriya/Ext/work/meerkat-council-local/webhook-secret
+chmod 600 /Users/mouriya/Ext/work/meerkat-council-local/webhook-secret
 export GH_TOKEN=<output of gh auth token>
-go run ./cmd/pm-council daemon --config-root /Users/mouriya/Ext/work/pm-council-local/config
-go run ./cmd/pm-council app --config-root /Users/mouriya/Ext/work/pm-council-local/config     # second terminal
+go run ./cmd/meerkat-council daemon --config-root /Users/mouriya/Ext/work/meerkat-council-local/config
+go run ./cmd/meerkat-council app --config-root /Users/mouriya/Ext/work/meerkat-council-local/config     # second terminal
 ```
 
 `scripts/prepare-omp-dir.sh <config-root>` builds the omp agent dir `omp.agentDir`: it copies `council/omp/config.yml` to `<agentDir>/config.yml` and links the credential store (`agent.db*`) and `models.yml` of `~/.omp/agent/`.
@@ -117,7 +117,7 @@ Sessions: rows come from the omp session files under `sessionsDir` (header `sess
 | `daemon.shutdownTimeoutSeconds` | seconds a daemon stop waits for its panels to end after cancelling them; a session a stop kills records the stop and its time. The HTTP server takes up to 5 s more, so the deployment's stop timeout must exceed the sum |
 | `sessionsDir` | root of the council's omp session files |
 | `checkoutDir` | PM repository checkouts for panels |
-| `guardiansURL` | pm-guardians base URL |
+| `guardiansURL` | meerkat-guardians base URL |
 | `omp.executable` | omp executable |
 | `omp.agentDir` | `PI_CODING_AGENT_DIR` of every omp child |
 | `omp.extension` | the plugin entry, `plugin/index.ts` |
@@ -134,7 +134,7 @@ Sessions: rows come from the omp session files under `sessionsDir` (header `sess
 
 `council/goals.yaml`: `draft`, `vote`, `revise` and `arbitrate`, each with `goalTools` (draft and revise: `pm_draft`; vote: `pm_vote`; arbitrate: `pm_ruling`), `opening` and `resume` (Go `text/template`s with `.Ref .Title .Body .Agenda .Round .Version .MaxRounds .Categories .Draft` — the draft marker JSON voted on, revised or arbitrated, empty for draft — `.Escalation`, nil or `{Issue, Ask, AskText}` where `AskText` is the ask comment's text, `.Counterexamples` (revise: `{Seat, Row, Counterexample}`) and `.Disputes` (arbitrate: `{Row, Seat, Citation, Classification}`)), and `continue` (plain text). Templates are executed at load with sample data with and without an escalation, counterexamples and disputes, so an unknown field is a load error.
 
-`council/proxy-readers.yaml`: `seats[]` with `seat` (a `seats.yaml` id), `default` (model), `others` (models, may be `[]`), `content` (non-empty subset of `code`, `design`, `omp`), `note`. Every seat with `draft` or `vote` has an entry. Every model named here must have a base in pm-guardians `bases.yaml`.
+`council/proxy-readers.yaml`: `seats[]` with `seat` (a `seats.yaml` id), `default` (model), `others` (models, may be `[]`), `content` (non-empty subset of `code`, `design`, `omp`), `note`. Every seat with `draft` or `vote` has an entry. Every model named here must have a base in meerkat-guardians `bases.yaml`.
 
 `council/omp/config.yml`: the omp settings of every seat session (copied by `scripts/prepare-omp-dir.sh`).
 

@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oh-my-omp/pm-council/internal/config"
-	"github.com/oh-my-omp/pm-council/internal/github"
-	"github.com/oh-my-omp/pm-council/internal/markers"
-	"github.com/oh-my-omp/pm-council/internal/queue"
-	"github.com/oh-my-omp/pm-council/internal/sessions"
-	"github.com/oh-my-omp/pm-council/internal/tally"
+	"github.com/mouriya-s-lab/meerkat-council/internal/config"
+	"github.com/mouriya-s-lab/meerkat-council/internal/github"
+	"github.com/mouriya-s-lab/meerkat-council/internal/markers"
+	"github.com/mouriya-s-lab/meerkat-council/internal/queue"
+	"github.com/mouriya-s-lab/meerkat-council/internal/sessions"
+	"github.com/mouriya-s-lab/meerkat-council/internal/tally"
 )
 
 func TestEndMarker(t *testing.T) {

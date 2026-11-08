@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oh-my-omp/pm-council/internal/config"
-	"github.com/oh-my-omp/pm-council/internal/github"
-	"github.com/oh-my-omp/pm-council/internal/panel"
-	"github.com/oh-my-omp/pm-council/internal/sessions"
+	"github.com/mouriya-s-lab/meerkat-council/internal/config"
+	"github.com/mouriya-s-lab/meerkat-council/internal/github"
+	"github.com/mouriya-s-lab/meerkat-council/internal/panel"
+	"github.com/mouriya-s-lab/meerkat-council/internal/sessions"
 )
 
 // stubbornPanels ignores its context: it ends only when release is closed.

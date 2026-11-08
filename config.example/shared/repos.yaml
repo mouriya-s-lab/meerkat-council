@@ -1,8 +1,8 @@
 pm:
-  repo: oh-my-omp/pm-e2e-agenda
-  project: { owner: oh-my-omp, number: 1 }
+  repo: mouriya-s-lab/meerkat-e2e-agenda
+  project: { owner: mouriya-s-lab, number: 1 }
 code:
-  - repo: oh-my-omp/pm-e2e-code
-    cwd: /Users/mouriya/Ext/work/pm-e2e/pm-e2e-code
-design: [oh-my-omp/pm-e2e-design]
+  - repo: mouriya-s-lab/meerkat-e2e-code
+    cwd: /Users/mouriya/Ext/work/meerkat-e2e/meerkat-e2e-code
+design: [mouriya-s-lab/meerkat-e2e-design]
 omp: []

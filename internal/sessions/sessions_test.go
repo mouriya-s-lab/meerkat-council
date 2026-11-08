@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oh-my-omp/pm-council/internal/config"
+	"github.com/mouriya-s-lab/meerkat-council/internal/config"
 )
 
 const done = `{"type":"title","v":1,"title":""}

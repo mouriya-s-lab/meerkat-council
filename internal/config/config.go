@@ -26,7 +26,7 @@ import (
 	"github.com/goccy/go-yaml/parser"
 	"github.com/goccy/go-yaml/token"
 
-	"github.com/oh-my-omp/pm-council/internal/markers"
+	"github.com/mouriya-s-lab/meerkat-council/internal/markers"
 )
 
 // Config is the validated configuration.

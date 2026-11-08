@@ -1,7 +1,7 @@
-// Command pm-council runs the Pepgent PM council.
+// Command meerkat-council runs the Pepgent PM council.
 //
-//	pm-council app    --config-root <dir>   repository webhook endpoint; wakes the daemon
-//	pm-council daemon --config-root <dir>   agenda queue rebuilt from GitHub; panels; HTTP API
+//	meerkat-council app    --config-root <dir>   repository webhook endpoint; wakes the daemon
+//	meerkat-council daemon --config-root <dir>   agenda queue rebuilt from GitHub; panels; HTTP API
 package main
 
 import (
@@ -17,17 +17,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/oh-my-omp/pm-council/internal/api"
-	"github.com/oh-my-omp/pm-council/internal/app"
-	"github.com/oh-my-omp/pm-council/internal/config"
-	"github.com/oh-my-omp/pm-council/internal/daemon"
-	"github.com/oh-my-omp/pm-council/internal/github"
-	"github.com/oh-my-omp/pm-council/internal/panel"
-	"github.com/oh-my-omp/pm-council/internal/sessions"
-	"github.com/oh-my-omp/pm-council/internal/tally"
+	"github.com/mouriya-s-lab/meerkat-council/internal/api"
+	"github.com/mouriya-s-lab/meerkat-council/internal/app"
+	"github.com/mouriya-s-lab/meerkat-council/internal/config"
+	"github.com/mouriya-s-lab/meerkat-council/internal/daemon"
+	"github.com/mouriya-s-lab/meerkat-council/internal/github"
+	"github.com/mouriya-s-lab/meerkat-council/internal/panel"
+	"github.com/mouriya-s-lab/meerkat-council/internal/sessions"
+	"github.com/mouriya-s-lab/meerkat-council/internal/tally"
 )
 
-const usage = "usage: pm-council app|daemon --config-root <dir>"
+const usage = "usage: meerkat-council app|daemon --config-root <dir>"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -56,7 +56,7 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		slog.Error("pm-council "+sub+" stopped", "err", err)
+		slog.Error("meerkat-council "+sub+" stopped", "err", err)
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

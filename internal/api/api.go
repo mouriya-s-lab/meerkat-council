@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oh-my-omp/pm-council/internal/config"
-	"github.com/oh-my-omp/pm-council/internal/queue"
-	"github.com/oh-my-omp/pm-council/internal/sessions"
+	"github.com/mouriya-s-lab/meerkat-council/internal/config"
+	"github.com/mouriya-s-lab/meerkat-council/internal/queue"
+	"github.com/mouriya-s-lab/meerkat-council/internal/sessions"
 )
 
 // Event is what the webhook entry point forwards: the issue ("owner/repo#n"), the GitHub event and its action.

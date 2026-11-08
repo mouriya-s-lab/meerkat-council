@@ -1,5 +1,5 @@
 /**
- * pm-council omp plugin.
+ * meerkat-council omp plugin.
  *
  * The council program starts every seat session with:
  * - PM_KIND: "draft" | "vote" | "revise" | "arbitrate"
@@ -9,7 +9,7 @@
  * - PM_CONTEXT: path of a JSON file with the seat, its rights and proxy-read mapping, the PM
  *   repository, the repositories by category, the human issues, the draft, the escalation, the
  *   row categories (tally.yaml) and the rows an arbitrate session rules on
- * - PM_GUARDIANS_URL: base URL of pm-guardians, which serves proxy reads
+ * - PM_GUARDIANS_URL: base URL of meerkat-guardians, which serves proxy reads
  * - GH_TOKEN: read access to the PM repository
  *
  * The plugin reads GitHub but never writes it: a goal tool only validates its arguments; the
@@ -42,7 +42,7 @@ interface Context {
 
 function requiredEnv(name: string): string {
 	const value = process.env[name];
-	if (value === undefined || value === "") throw new Error(`pm-council plugin: ${name} is not set`);
+	if (value === undefined || value === "") throw new Error(`meerkat-council plugin: ${name} is not set`);
 	return value;
 }
 
@@ -92,10 +92,10 @@ async function readIssue(repo: string, number: number, signal: AbortSignal | und
 	return text;
 }
 
-export default function pmCouncil(pi: ExtensionAPI): void {
+export default function meerkatCouncil(pi: ExtensionAPI): void {
 	const kind = requiredEnv("PM_KIND");
 	if (kind !== "draft" && kind !== "vote" && kind !== "revise" && kind !== "arbitrate") {
-		throw new Error(`pm-council plugin: PM_KIND ${kind} is not draft, vote, revise or arbitrate`);
+		throw new Error(`meerkat-council plugin: PM_KIND ${kind} is not draft, vote, revise or arbitrate`);
 	}
 	const goalTools = new Set(requiredEnv("PM_GOAL_TOOLS").split(","));
 	const continueText = requiredEnv("PM_CONTINUE");
@@ -172,7 +172,7 @@ export default function pmCouncil(pi: ExtensionAPI): void {
 			};
 			const res = await fetch(`${guardiansURL}/v1/proxy-reads`, init);
 			const text = await res.text();
-			if (res.status !== 200) throw new Error(`pm-guardians ${res.status}: ${text}`);
+			if (res.status !== 200) throw new Error(`meerkat-guardians ${res.status}: ${text}`);
 			const body = JSON.parse(text) as { session: string; facts: string };
 			return { content: [{ type: "text" as const, text: body.facts }] };
 		},

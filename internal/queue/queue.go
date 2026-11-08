@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oh-my-omp/pm-council/internal/markers"
+	"github.com/mouriya-s-lab/meerkat-council/internal/markers"
 )
 
 // Ref is an issue reference, "owner/repo#n".

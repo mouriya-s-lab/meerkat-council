@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/oh-my-omp/pm-council/internal/config"
-	"github.com/oh-my-omp/pm-council/internal/markers"
+	"github.com/mouriya-s-lab/meerkat-council/internal/config"
+	"github.com/mouriya-s-lab/meerkat-council/internal/markers"
 )
 
 var (

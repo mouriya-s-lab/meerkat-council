@@ -9,10 +9,10 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/oh-my-omp/pm-council/internal/config"
-	"github.com/oh-my-omp/pm-council/internal/github"
-	"github.com/oh-my-omp/pm-council/internal/markers"
-	"github.com/oh-my-omp/pm-council/internal/queue"
+	"github.com/mouriya-s-lab/meerkat-council/internal/config"
+	"github.com/mouriya-s-lab/meerkat-council/internal/github"
+	"github.com/mouriya-s-lab/meerkat-council/internal/markers"
+	"github.com/mouriya-s-lab/meerkat-council/internal/queue"
 )
 
 // GitHub is the part of the GitHub client the tally uses.

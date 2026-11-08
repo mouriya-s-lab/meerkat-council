@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oh-my-omp/pm-council/internal/config"
-	"github.com/oh-my-omp/pm-council/internal/github"
-	"github.com/oh-my-omp/pm-council/internal/markers"
-	"github.com/oh-my-omp/pm-council/internal/panel"
-	"github.com/oh-my-omp/pm-council/internal/queue"
+	"github.com/mouriya-s-lab/meerkat-council/internal/config"
+	"github.com/mouriya-s-lab/meerkat-council/internal/github"
+	"github.com/mouriya-s-lab/meerkat-council/internal/markers"
+	"github.com/mouriya-s-lab/meerkat-council/internal/panel"
+	"github.com/mouriya-s-lab/meerkat-council/internal/queue"
 )
 
 // fakePanels reports each started job and holds it until its context ends, then reports the cause.

@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/oh-my-omp/pm-council/internal/config"
-	"github.com/oh-my-omp/pm-council/internal/github"
-	"github.com/oh-my-omp/pm-council/internal/markers"
-	"github.com/oh-my-omp/pm-council/internal/queue"
+	"github.com/mouriya-s-lab/meerkat-council/internal/config"
+	"github.com/mouriya-s-lab/meerkat-council/internal/github"
+	"github.com/mouriya-s-lab/meerkat-council/internal/markers"
+	"github.com/mouriya-s-lab/meerkat-council/internal/queue"
 )
 
 // errCrash is the fake's kill -9: the mutation that hits the budget is not applied and every
@@ -254,8 +254,8 @@ func (f *fakeGitHub) state() string {
 }
 
 const (
-	pmRepo   = "oh-my-omp/pm-e2e-agenda"
-	codeRepo = "oh-my-omp/pm-e2e-code"
+	pmRepo   = "mouriya-s-lab/meerkat-e2e-agenda"
+	codeRepo = "mouriya-s-lab/meerkat-e2e-code"
 )
 
 func loadConfig(t *testing.T) *config.Config {

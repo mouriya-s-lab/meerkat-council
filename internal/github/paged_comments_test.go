@@ -17,7 +17,7 @@ import (
 
 	"github.com/cli/go-gh/v2/pkg/api"
 
-	"github.com/oh-my-omp/pm-council/internal/markers"
+	"github.com/mouriya-s-lab/meerkat-council/internal/markers"
 )
 
 const (

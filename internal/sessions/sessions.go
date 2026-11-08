@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oh-my-omp/pm-guardians/omprpc"
+	"github.com/mouriya-s-lab/meerkat-guardians/omprpc"
 
-	"github.com/oh-my-omp/pm-council/internal/config"
+	"github.com/mouriya-s-lab/meerkat-council/internal/config"
 )
 
 // Meta is the pm-meta custom entry the council plugin appends at session start.

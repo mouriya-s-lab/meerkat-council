@@ -5,8 +5,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/oh-my-omp/pm-council/internal/config"
-	"github.com/oh-my-omp/pm-council/internal/markers"
+	"github.com/mouriya-s-lab/meerkat-council/internal/config"
+	"github.com/mouriya-s-lab/meerkat-council/internal/markers"
 )
 
 // Outcome is what a draft version's votes lead to: Arbitrate, Revise or Decide.

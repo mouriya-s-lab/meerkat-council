@@ -15,12 +15,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/oh-my-omp/pm-council/internal/config"
-	"github.com/oh-my-omp/pm-council/internal/github"
-	"github.com/oh-my-omp/pm-council/internal/markers"
-	"github.com/oh-my-omp/pm-council/internal/panel"
-	"github.com/oh-my-omp/pm-council/internal/queue"
-	"github.com/oh-my-omp/pm-council/internal/sessions"
+	"github.com/mouriya-s-lab/meerkat-council/internal/config"
+	"github.com/mouriya-s-lab/meerkat-council/internal/github"
+	"github.com/mouriya-s-lab/meerkat-council/internal/markers"
+	"github.com/mouriya-s-lab/meerkat-council/internal/panel"
+	"github.com/mouriya-s-lab/meerkat-council/internal/queue"
+	"github.com/mouriya-s-lab/meerkat-council/internal/sessions"
 )
 
 // GitHub is the part of the GitHub client the daemon uses.
