@@ -24,10 +24,10 @@ type Publication struct {
 }
 
 // Publish carries the decision of p out on GitHub, in order: implementation issues for passed rows
-// with deliver; pm:decision; the superseded issues of a human issue; the escalated ask's
+// with deliver; meerkat:decision; the superseded issues of a human issue; the escalated ask's
 // settlement; the archive commit; the agenda issue closed and Status=Done. Every step first reads
 // GitHub and skips what is already there, so a publish cut short anywhere is finished by running
-// it again. Once a pm:decision of the version exists, its impl and superseded lists are the
+// it again. Once a meerkat:decision of the version exists, its impl and superseded lists are the
 // decision, and p.Rows is not used.
 func (t *Tally) Publish(ctx context.Context, p Publication) error {
 	repo, n, ok := queue.ParseRef(string(p.Ref))
@@ -102,7 +102,7 @@ func (pb *publish) run(ctx context.Context) error {
 	return pb.finish(ctx)
 }
 
-// decisionOf returns the latest pm:decision of version.
+// decisionOf returns the latest meerkat:decision of version.
 func decisionOf(ms []markers.Marker, version int) (markers.Decision, bool) {
 	for i := len(ms) - 1; i >= 0; i-- {
 		if d, ok := ms[i].(markers.Decision); ok && d.Version == version {
@@ -129,7 +129,7 @@ func passedDeliverRows(d markers.Draft, rows []markers.DecisionRow) []markers.Ro
 }
 
 // checkDeliver rejects a delivered row whose deliver is unusable for issue creation: the rule
-// pm_draft enforces on submission, applied to every row the publish would turn into an issue. The
+// meerkat_draft enforces on submission, applied to every row the publish would turn into an issue. The
 // error names the row and the field, so the panel fails before any GitHub write.
 func checkDeliver(r markers.Row, repos []config.CodeRepo) error {
 	fields := []struct {
@@ -162,7 +162,7 @@ func (pb *publish) replacement(deliver []markers.Row) int {
 	return slices.IndexFunc(deliver, func(r markers.Row) bool { return strings.EqualFold(r.Deliver.Repo, escRepo) })
 }
 
-// implIssues makes sure each row of deliver has its implementation issue (contract §7): found
+// implIssues makes sure each row of deliver has its implementation issue: found
 // among the agenda's sub-issues by repository and title, or created as one; its body carries the
 // numbered launch link; it is a Project item with Kind=Implementation and Proposer set, and
 // Status=Todo when it has none.
@@ -231,7 +231,7 @@ func (pb *publish) codeRepo(repo string) (config.CodeRepo, bool) {
 	return pb.cfg.Repos.Code[i], true
 }
 
-// implBody renders the body; a replacing issue's body ends with its pm:replaces marker.
+// implBody renders the body; a replacing issue's body ends with its meerkat:replaces marker.
 func (pb *publish) implBody(d config.ImplIssueData) (string, error) {
 	body, err := pb.cfg.Council.ImplIssue.RenderBody(d)
 	if err != nil {
@@ -312,7 +312,7 @@ func (pb *publish) refusal(ctx context.Context, ref string) (string, error) {
 	case !ok:
 		return "not an issue reference", nil
 	case !strings.EqualFold(repo, pb.repo):
-		return "not an issue of the PM repository", nil
+		return "not an issue of the agenda repository", nil
 	case n == pb.number:
 		return "the issue itself", nil
 	}
@@ -409,9 +409,9 @@ func (pb *publish) closeAs(ctx context.Context, repo string, n int, status strin
 	return nil
 }
 
-// settle settles the ask the agenda issue was raised from exactly once (contract §2, §B): a
-// replacing implementation issue was created in step 1, so the old issue gets pm:replaced, is
-// superseded and closed; otherwise it gets a pm:reply naming this agenda issue. A reply or
+// settle settles the ask the agenda issue was raised from exactly once: a
+// replacing implementation issue was created in step 1, so the old issue gets meerkat:replaced, is
+// superseded and closed; otherwise it gets a meerkat:reply naming this agenda issue. A reply or
 // replaced already naming the ask ends it (a replaced one is still superseded and closed).
 func (pb *publish) settle(ctx context.Context, dec markers.Decision, replacement int) error {
 	if pb.esc == nil {
@@ -465,7 +465,7 @@ func (pb *publish) settle(ctx context.Context, dec markers.Decision, replacement
 	return nil
 }
 
-// archive commits the decision file and one file per voting seat to the PM repository's default
+// archive commits the decision file and one file per voting seat to the agenda repository's default
 // branch, unless the decision file already exists there.
 func (pb *publish) archive(ctx context.Context, dec markers.Decision, ms []markers.Marker) error {
 	a := pb.cfg.Council.Archive
@@ -524,7 +524,7 @@ func (pb *publish) finish(ctx context.Context) error {
 	return nil
 }
 
-// DraftText is the human-readable body of a pm:draft comment.
+// DraftText is the human-readable body of a meerkat:draft comment.
 func DraftText(d markers.Draft) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "决策表第 %d 版。\n\n| id | what | where | how | 取舍 | 分类 | 缺失设计 | 落到 |\n|---|---|---|---|---|---|---|---|\n", d.Version)
@@ -559,7 +559,7 @@ func decisionTable(d markers.Decision) string {
 	return b.String()
 }
 
-// decisionText is the human-readable body of a pm:decision comment, with one line per refused
+// decisionText is the human-readable body of a meerkat:decision comment, with one line per refused
 // supersede.
 func decisionText(d markers.Decision, refusals []string) string {
 	var b strings.Builder

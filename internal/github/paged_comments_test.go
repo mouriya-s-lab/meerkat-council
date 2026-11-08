@@ -40,7 +40,7 @@ func pagedBody(seed, i int) string {
 	if i%pagedMarkerEvery == 2 {
 		return fmt.Sprintf("%s\nplain human discussion, no marker", pad)
 	}
-	return fmt.Sprintf("%s\n<!-- pm:superseded {\"v\":1,\"by\":\"o/pm#9\"} -->", pad)
+	return fmt.Sprintf("%s\n<!-- meerkat:superseded {\"v\":1,\"by\":\"o/agenda#9\"} -->", pad)
 }
 
 func stubPagedComments(seed int) (*Client, func()) {
@@ -62,7 +62,7 @@ func stubPagedComments(seed int) (*Client, func()) {
 		}
 		sb.WriteByte(']')
 		if page < pagedPages {
-			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/o/pm/issues/1/comments?per_page=100&page=%d>; rel="next"`, srv.URL, page+1))
+			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/o/agenda/issues/1/comments?per_page=100&page=%d>; rel="next"`, srv.URL, page+1))
 		}
 		w.Write([]byte(sb.String()))
 	}))
@@ -99,7 +99,7 @@ func TestPagedCommentsAgree(t *testing.T) {
 	c, close := stubPagedComments(seed)
 	defer close()
 	var streamed []string
-	if err := c.EachComment(context.Background(), "o/pm", 1, func(body string, _ time.Time) error {
+	if err := c.EachComment(context.Background(), "o/agenda", 1, func(body string, _ time.Time) error {
 		streamed = append(streamed, body)
 		return nil
 	}); err != nil {
@@ -120,7 +120,7 @@ func TestPagedCommentsAgree(t *testing.T) {
 		}
 	}
 	nMarkers := 0
-	if err := c.CommentMarkers(context.Background(), "o/pm", 1, func(markers.Marker) error {
+	if err := c.CommentMarkers(context.Background(), "o/agenda", 1, func(markers.Marker) error {
 		nMarkers++
 		return nil
 	}); err != nil {

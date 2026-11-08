@@ -122,11 +122,11 @@ func TestLoadErrors(t *testing.T) {
 		{"missing session timeout", "council/runtime.yaml", "sessionTimeoutSeconds: 300\n", "", "council/runtime.yaml: sessionTimeoutSeconds"},
 		{"zero session timeout", "council/runtime.yaml", "sessionTimeoutSeconds: 300", "sessionTimeoutSeconds: 0", "council/runtime.yaml: sessionTimeoutSeconds"},
 		{"bad resume", "council/council.yaml", "resume: fork", "resume: restart", `council/council.yaml: resume: "restart" is not one of fork, fresh`},
-		{"foreign goal tool", "council/goals.yaml", "goalTools: [pm_vote]", "goalTools: [pm_draft]", `council/goals.yaml: vote.goalTools[0]: "pm_draft" is not a vote goal tool`},
-		{"removed goal tool", "council/goals.yaml", "goalTools: [pm_draft]", "goalTools: [pm_draft, pm_block]", `council/goals.yaml: draft.goalTools[1]: "pm_block" is not a draft goal tool`},
+		{"foreign goal tool", "council/goals.yaml", "goalTools: [meerkat_vote]", "goalTools: [meerkat_draft]", `council/goals.yaml: vote.goalTools[0]: "meerkat_draft" is not a vote goal tool`},
+		{"removed goal tool", "council/goals.yaml", "goalTools: [meerkat_draft]", "goalTools: [meerkat_draft, meerkat_block]", `council/goals.yaml: draft.goalTools[1]: "meerkat_block" is not a draft goal tool`},
 		{"unknown template field", "council/goals.yaml", "{{.Ref}}（议程编号 {{.Agenda}}", "{{.Issue}}（议程编号 {{.Agenda}}", "council/goals.yaml: draft.opening"},
 		{"unguarded escalation", "council/goals.yaml", "{{if .Escalation}}", "{{.Escalation.Issue}}{{if .Escalation}}", "council/goals.yaml: draft.opening"},
-		{"missing continue", "council/goals.yaml", "  continue: 你还没有成功调用 pm_vote。审查决策表的每一行，调用 pm_vote 交出本席位的票；若工具返回错误，按错误修正后重试。", `  continue: ""`, "council/goals.yaml: vote.continue: missing"},
+		{"missing continue", "council/goals.yaml", "  continue: 你还没有成功调用 meerkat_vote。审查决策表的每一行，调用 meerkat_vote 交出本席位的票；若工具返回错误，按错误修正后重试。", `  continue: ""`, "council/goals.yaml: vote.continue: missing"},
 		{"unknown proxy seat", "council/proxy-readers.yaml", "seat: Argon", "seat: Nobody", `council/proxy-readers.yaml: seats[2].seat: "Nobody" is not a seat`},
 		{"voter without proxy entry", "council/proxy-readers.yaml", "seat: Argon", "seat: LeadMentor", `council/proxy-readers.yaml: seats: seat "Argon" drafts or votes and has no entry`},
 		{"bad content", "council/proxy-readers.yaml", "content: [design]", "content: [web]", `council/proxy-readers.yaml: seats[2].content[0]: "web" is not one of code, design, omp`},
@@ -145,7 +145,7 @@ func TestLoadErrors(t *testing.T) {
 		{"missing frontend", "council/council.yaml", "  frontend: { kind: tern }\n", "", "council/council.yaml: launchLink.frontend.kind: missing"},
 		{"unknown reply field", "council/council.yaml", "{{.Text}}", "{{.Settle}}", "council/council.yaml: reply.body"},
 		{"archive outside the repository", "council/council.yaml", "archive: null", "archive: { decisions: ../d, votes: votes }", `council/council.yaml: archive.decisions: "../d" is not a clean relative directory`},
-		{"arbitrate goal tool", "council/goals.yaml", "goalTools: [pm_ruling]", "goalTools: [pm_vote]", `council/goals.yaml: arbitrate.goalTools[0]: "pm_vote" is not a arbitrate goal tool`},
+		{"arbitrate goal tool", "council/goals.yaml", "goalTools: [meerkat_ruling]", "goalTools: [meerkat_vote]", `council/goals.yaml: arbitrate.goalTools[0]: "meerkat_vote" is not a arbitrate goal tool`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := copyExample(t)

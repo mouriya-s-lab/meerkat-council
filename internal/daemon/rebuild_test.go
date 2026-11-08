@@ -34,7 +34,7 @@ func markerLine(t *testing.T, j int) (string, bool) {
 	case 2:
 		return "", false
 	default:
-		m = markers.Superseded{By: "o/pm#9"}
+		m = markers.Superseded{By: "o/agenda#9"}
 	}
 	line, err := markers.Format(m)
 	if err != nil {
@@ -68,7 +68,7 @@ func rebuildDaemon(t *testing.T) (*Daemon, *fakeGitHub) {
 	for i := range rebuildIssues {
 		n := i + 1
 		gh.items = append(gh.items, github.Item{
-			ID: fmt.Sprintf("i%d", n), Repo: "o/pm", Number: n,
+			ID: fmt.Sprintf("i%d", n), Repo: "o/agenda", Number: n,
 			UpdatedAt: t1,
 			Fields:    map[string]string{"Kind": "Agenda", "Agenda": fmt.Sprintf("D%d", n), "Status": "In Progress"},
 		})

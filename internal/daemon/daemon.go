@@ -1,4 +1,4 @@
-// Package daemon keeps an in-memory copy of the PM repository's agenda issues, rebuilt from
+// Package daemon keeps an in-memory copy of the agenda repository's agenda issues, rebuilt from
 // GitHub at startup, on every forwarded issue event (that one issue) and every rebuild interval
 // (everything). It admits new agenda issues (Agenda number; Status=Todo when unset), publishes the queue and
 // starts, interrupts and resumes panels. GitHub is the only source of issue state; the copy is
@@ -41,7 +41,7 @@ type Panels interface {
 	Run(ctx context.Context, j panel.Job)
 }
 
-// record is one PM-repository issue in the Project as last read from GitHub. updatedAt is the
+// record is one agenda-repository issue in the Project as last read from GitHub. updatedAt is the
 // issue's updatedAt at the time of its last read: an unchanged value on a later ProjectItems
 // means the comments and the issue state are still the ones this record carries (it changes on
 // new and edited comments, close and reopen, not on Project field writes).
@@ -99,7 +99,7 @@ func (d *Daemon) Queue() queue.Queue {
 	return queue.Queue{}
 }
 
-// Notify hands an issue number of the PM repository to the worker.
+// Notify hands an issue number of the agenda repository to the worker.
 func (d *Daemon) Notify(ctx context.Context, number int) error {
 	select {
 	case d.events <- number:
@@ -111,7 +111,7 @@ func (d *Daemon) Notify(ctx context.Context, number int) error {
 
 // Run serves events, panel completions and periodic full rebuilds until ctx ends; then it stops the
 // live panels (see shutdown). The startup rebuild done by New counts as a full rebuild. Full rebuilds
-// resume failed and orphaned panels whose latest pm:panel predates the process start; refreshes
+// resume failed and orphaned panels whose latest meerkat:panel predates the process start; refreshes
 // resume none of them.
 func (d *Daemon) Run(ctx context.Context) {
 	tick := time.NewTicker(d.cfg.Runtime.Daemon.RebuildInterval())
@@ -175,7 +175,7 @@ func (d *Daemon) shutdown() {
 	}
 }
 
-// refreshDecided re-reads an issue whose panel ended and, when it carries a decision, every PM
+// refreshDecided re-reads an issue whose panel ended and, when it carries a decision, every agenda
 // issue that decision superseded: the panel changed them on GitHub, and scheduling from the old
 // copy would convene an issue that was just superseded.
 func (d *Daemon) refreshDecided(ctx context.Context, number int) error {
@@ -192,7 +192,7 @@ func (d *Daemon) refreshDecided(ctx context.Context, number int) error {
 	}
 	for _, ref := range dec.Superseded {
 		repo, n, ok := queue.ParseRef(ref)
-		if !ok || !strings.EqualFold(repo, d.cfg.Repos.PM.Repo) {
+		if !ok || !strings.EqualFold(repo, d.cfg.Repos.Agenda.Repo) {
 			continue
 		}
 		if err := d.refresh(ctx, n); err != nil {
@@ -203,7 +203,7 @@ func (d *Daemon) refreshDecided(ctx context.Context, number int) error {
 }
 
 // schedule applies the panel rule after a published queue: stop the live panel of every issue
-// that left deliberation (closed, done or superseded, and without a pm:decision the panel is
+// that left deliberation (closed, done or superseded, and without a meerkat:decision the panel is
 // publishing); while a human issue is undecided,
 // interrupt every other live panel of a non-human issue; wait until each stopped panel has ended;
 // then start panels for the queue's candidates (queue.Candidates with resumeBefore) up to
@@ -289,7 +289,7 @@ func (d *Daemon) rebuild(ctx context.Context) error {
 	records := make(map[int]record, len(items))
 	reread := 0
 	for _, it := range items {
-		if !strings.EqualFold(it.Repo, d.cfg.Repos.PM.Repo) {
+		if !strings.EqualFold(it.Repo, d.cfg.Repos.Agenda.Repo) {
 			continue
 		}
 		if r, ok := d.reuse(it); ok {
@@ -335,7 +335,7 @@ func (d *Daemon) patchedRecord(prev record, it github.Item) record {
 
 // refresh re-reads one issue; an issue no longer in the Project leaves the copy.
 func (d *Daemon) refresh(ctx context.Context, number int) error {
-	it, ok, err := d.gh.IssueItem(ctx, d.cfg.Repos.PM.Repo, number, d.project.ID)
+	it, ok, err := d.gh.IssueItem(ctx, d.cfg.Repos.Agenda.Repo, number, d.project.ID)
 	if err != nil {
 		return err
 	}
@@ -369,7 +369,7 @@ func (d *Daemon) read(ctx context.Context, it github.Item) (record, error) {
 	if is.Kind == queue.KindNone {
 		slog.Info("issue has no Kind; not on the agenda", "issue", ref, "field", p.Kind.Name, "value", it.Fields[p.Kind.Name])
 	}
-	// The parsed markers, and the time of the comment of the latest pm:panel.
+	// The parsed markers, and the time of the comment of the latest meerkat:panel.
 	// EachComment decodes one page at a time and releases it before fetching the
 	// next; only the parsed markers and the PanelAt stamp are retained.
 	// No comment cache or index is kept.

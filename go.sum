@@ -23,8 +23,8 @@ github.com/lucasb-eyer/go-colorful v1.4.1 h1:1EO+WB73+EH8EVbzlrG3KLAfEypQWVHIBql
 github.com/lucasb-eyer/go-colorful v1.4.1/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
-github.com/mouriya-s-lab/meerkat-guardians v0.0.0-20261108135554-027d97d1113e h1:of1VOOqDimpHI2759ZOWcZ3h9TZxafvAVVXvXyM0y38=
-github.com/mouriya-s-lab/meerkat-guardians v0.0.0-20261108135554-027d97d1113e/go.mod h1:3cbmZegfstLQsqh/HwW8A3x4xaWlAZuz7v8CRoZj82U=
+github.com/mouriya-s-lab/meerkat-guardians v0.0.0-20261108150735-44d0cdc13264 h1:9GuXn/golcJNwTZhxBr5Aq62L/Tbxsbp5AllXklU4Vc=
+github.com/mouriya-s-lab/meerkat-guardians v0.0.0-20261108150735-44d0cdc13264/go.mod h1:3cbmZegfstLQsqh/HwW8A3x4xaWlAZuz7v8CRoZj82U=
 github.com/muesli/termenv v0.16.0 h1:S5AlUN9dENB57rsbnkPyfdGuWIlkmzJjbFf0Tf5FWUc=
 github.com/muesli/termenv v0.16.0/go.mod h1:ZRfOIKPFDYQoDFF4Olj7/QJbW60Ol/kL1pU3VfY/Cnk=
 github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=

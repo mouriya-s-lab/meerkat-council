@@ -28,14 +28,14 @@ const MaxBody = 25 << 20
 var forwarded = map[string]bool{"issues": true, "issue_comment": true, "sub_issues": true, "issue_dependencies": true}
 
 type App struct {
-	secret    []byte
-	pmRepo    string
-	daemonURL string
-	client    *http.Client
+	secret     []byte
+	agendaRepo string
+	daemonURL  string
+	client     *http.Client
 }
 
-func New(secret []byte, pmRepo, daemonURL string) *App {
-	return &App{secret: secret, pmRepo: pmRepo, daemonURL: strings.TrimRight(daemonURL, "/"), client: &http.Client{Timeout: 10 * time.Second}}
+func New(secret []byte, agendaRepo, daemonURL string) *App {
+	return &App{secret: secret, agendaRepo: agendaRepo, daemonURL: strings.TrimRight(daemonURL, "/"), client: &http.Client{Timeout: 10 * time.Second}}
 }
 
 // Handler serves POST /webhook.
@@ -104,7 +104,7 @@ func (a *App) webhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if !strings.EqualFold(p.Repository.FullName, a.pmRepo) {
+	if !strings.EqualFold(p.Repository.FullName, a.agendaRepo) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}

@@ -1,5 +1,5 @@
-// Package markers parses and formats PM machine markers: the last line of an issue or comment
-// body, `<!-- pm:<kind> <JSON> -->`, with single-line JSON carrying "v":1 (contract §2, §A, §B).
+// Package markers parses and formats Meerkat machine markers: the last line of an issue or comment
+// body, `<!-- meerkat:<kind> <JSON> -->`, with single-line JSON carrying "v":1.
 // A marker whose JSON lacks a field of its kind, has a field of the wrong type or an unknown enum
 // value, or whose "v" is not 1 does not count as a marker.
 package markers
@@ -34,7 +34,7 @@ const (
 )
 
 // Marker is one of Panel, Draft, Vote, Ruling, Decision, Superseded, Escalation (agenda issues)
-// or Reply, Replaced, Replaces (implementation issues, contract §2).
+// or Reply, Replaced, Replaces (implementation issues).
 type Marker interface {
 	Kind() Kind
 	validate() error
@@ -257,10 +257,10 @@ func (Reply) validate() error      { return nil }
 func (Replaced) validate() error   { return nil }
 func (Replaces) validate() error   { return nil }
 
-var linePattern = regexp.MustCompile(`^<!-- pm:([a-z]+) (\{.*\}) -->$`)
+var linePattern = regexp.MustCompile(`^<!-- meerkat:([a-z]+) (\{.*\}) -->$`)
 
-// ErrNoMarker means the body's last line is not a pm marker line.
-var ErrNoMarker = errors.New("no pm marker")
+// ErrNoMarker means the body's last line is not a meerkat marker line.
+var ErrNoMarker = errors.New("no meerkat marker")
 
 // LastLine returns the last non-blank line of body: Parse only reads this line,
 // so streaming callers can parse it and release the full body at once.
@@ -302,17 +302,17 @@ func ParseLine(line string) (Marker, error) {
 	case KindReplaces:
 		mk = &Replaces{}
 	default:
-		return nil, fmt.Errorf("pm:%s: not a council marker kind", kind)
+		return nil, fmt.Errorf("meerkat:%s: not a council marker kind", kind)
 	}
 	if err := decode(raw, mk); err != nil {
-		return nil, fmt.Errorf("pm:%s: %w", kind, err)
+		return nil, fmt.Errorf("meerkat:%s: %w", kind, err)
 	}
 	// Return the value, not the pointer, so callers switch on value types.
 	return reflect.ValueOf(mk).Elem().Interface().(Marker), nil
 }
 
 // Parse returns the marker on the last non-blank line of body. It returns ErrNoMarker when that
-// line is not `<!-- pm:<kind> <JSON> -->`, and another error when it is one but does not parse
+// line is not `<!-- meerkat:<kind> <JSON> -->`, and another error when it is one but does not parse
 // into a council marker of that kind.
 func Parse(body string) (Marker, error) {
 	return ParseLine(LastLine(body))
@@ -395,20 +395,20 @@ func label(path string) string {
 	return path
 }
 
-// Format renders m as its marker line, `<!-- pm:<kind> {"v":1,...} -->`.
+// Format renders m as its marker line, `<!-- meerkat:<kind> {"v":1,...} -->`.
 func Format(m Marker) (string, error) {
 	b, err := json.Marshal(m)
 	if err != nil {
 		return "", err
 	}
 	if len(b) < 2 || b[0] != '{' {
-		return "", fmt.Errorf("pm:%s: marker is not a JSON object", m.Kind())
+		return "", fmt.Errorf("meerkat:%s: marker is not a JSON object", m.Kind())
 	}
 	sep := ","
 	if string(b) == "{}" {
 		sep = ""
 	}
-	return fmt.Sprintf(`<!-- pm:%s {"v":%d%s%s -->`, m.Kind(), Version, sep, b[1:]), nil
+	return fmt.Sprintf(`<!-- meerkat:%s {"v":%d%s%s -->`, m.Kind(), Version, sep, b[1:]), nil
 }
 
 // Comment renders a comment body: text, a blank line, then m's marker line. It fails when the line
@@ -424,7 +424,7 @@ func Comment(text string, m Marker) (string, error) {
 	return strings.TrimRight(text, "\n") + "\n\n" + line, nil
 }
 
-// LastPanel returns the latest pm:panel marker of ms.
+// LastPanel returns the latest meerkat:panel marker of ms.
 func LastPanel(ms []Marker) (Panel, bool) {
 	for i := len(ms) - 1; i >= 0; i-- {
 		if p, ok := ms[i].(Panel); ok {
@@ -434,7 +434,7 @@ func LastPanel(ms []Marker) (Panel, bool) {
 	return Panel{}, false
 }
 
-// LastDecision returns the latest pm:decision marker of ms.
+// LastDecision returns the latest meerkat:decision marker of ms.
 func LastDecision(ms []Marker) (Decision, bool) {
 	for i := len(ms) - 1; i >= 0; i-- {
 		if d, ok := ms[i].(Decision); ok {

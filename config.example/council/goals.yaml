@@ -1,5 +1,5 @@
 draft:
-  goalTools: [pm_draft]
+  goalTools: [meerkat_draft]
   opening: |
     你在为议题 {{.Ref}}（议程编号 {{.Agenda}}，第 {{.Round}} 轮）起草决策表第 {{.Version}} 版。
 
@@ -11,20 +11,20 @@ draft:
     这个议题由实现 issue {{.Escalation.Issue}} 上的询问（评论 {{.Escalation.Ask}}）提出。询问原文：
     {{.Escalation.AskText}}
 
-    pm_draft 必须给出 settle：kind 为 reply（定案后答复这条询问，text 是答复正文）或 replace（定案后另开 issue 取代该实现 issue）。
+    meerkat_draft 必须给出 settle：kind 为 reply（定案后答复这条询问，text 是答复正文）或 replace（定案后另开 issue 取代该实现 issue）。
     {{end}}
     步骤：
-    1. 先用 pm_proxy_read 向代码仓库提问，查清与本议题相关的入口文件、命令与数据存储位置（可用的仓库与模型见该工具的说明）。
-    2. 需要时用 pm_read_issue 查阅 PM 仓库里的议题。
-    3. 调用 pm_draft 提交决策表。每行 id 写成 "{{.Agenda}}-<两位序号>"，从 01 起；what、where（带文件路径）、how、tradeoff 写清楚；category 取以下之一：{{range $i, $c := .Categories}}{{if $i}}、{{end}}{{$c}}{{end}}；missingDesign 表示设计书是否缺这部分。行有实现 issue 时给 deliver（repo、title、body，去首尾空白后都不能为空）；行只要设计结论、不建实现 issue 时，整行不要 deliver 字段（连键都不传，不要传 null 或空串）。无交付行的一行完整示例：{"id":"{{.Agenda}}-01","what":"决策:列出X的W","where":"Y.md","how":"读到W后给出结论","tradeoff":"无","category":"意图","missingDesign":false}（无 deliver 键，一次通过）。supersedes 只有人类议题才填，普通议题为 []；withdrawn 为 null。
+    1. 先用 meerkat_proxy_read 向代码仓库提问，查清与本议题相关的入口文件、命令与数据存储位置（可用的仓库与模型见该工具的说明）。
+    2. 需要时用 meerkat_read_issue 查阅议程仓库里的议题。
+    3. 调用 meerkat_draft 提交决策表。每行 id 写成 "{{.Agenda}}-<两位序号>"，从 01 起；what、where（带文件路径）、how、tradeoff 写清楚；category 取以下之一：{{range $i, $c := .Categories}}{{if $i}}、{{end}}{{$c}}{{end}}；missingDesign 表示设计书是否缺这部分。行有实现 issue 时给 deliver（repo、title、body，去首尾空白后都不能为空）；行只要设计结论、不建实现 issue 时，整行不要 deliver 字段（连键都不传，不要传 null 或空串）。无交付行的一行完整示例：{"id":"{{.Agenda}}-01","what":"决策:列出X的W","where":"Y.md","how":"读到W后给出结论","tradeoff":"无","category":"意图","missingDesign":false}（无 deliver 键，一次通过）。supersedes 只有人类议题才填，普通议题为 []；withdrawn 为 null。
 
-    pm_draft 成功即结束本任务。
-  continue: 你还没有成功调用 pm_draft。按开场消息的要求完成决策表，调用 pm_draft 结束本任务；若工具返回错误，按错误修正后重试。
+    meerkat_draft 成功即结束本任务。
+  continue: 你还没有成功调用 meerkat_draft。按开场消息的要求完成决策表，调用 meerkat_draft 结束本任务；若工具返回错误，按错误修正后重试。
   resume: |
     你之前为议题 {{.Ref}} 起草决策表第 {{.Version}} 版的会话被中止，现已恢复。
-    接着之前的进度完成起草，调用 pm_draft 提交决策表，成功即结束本任务。
+    接着之前的进度完成起草，调用 meerkat_draft 提交决策表，成功即结束本任务。
 vote:
-  goalTools: [pm_vote]
+  goalTools: [meerkat_vote]
   opening: |
     你在对议题 {{.Ref}}（议程编号 {{.Agenda}}，第 {{.Round}} 轮）的决策表第 {{.Version}} 版投票。
 
@@ -33,18 +33,18 @@ vote:
     议题正文：
     {{.Body}}
 
-    决策表（pm:draft 标记的 JSON）：
+    决策表（meerkat:draft 标记的 JSON）：
     {{.Draft}}
 
-    逐行审查后调用 pm_vote：rows 覆盖决策表的每一行，每行一次，row 为该行 id；choice 为 approve、oppose 或 veto。
+    逐行审查后调用 meerkat_vote：rows 覆盖决策表的每一行，每行一次，row 为该行 id；choice 为 approve、oppose 或 veto。
     oppose 必须给出可复现的反例 counterexample；veto 只限有否决权的席位，且 citation 必须是一个人类议题的 ref；classification 写你对该行分类（{{range $i, $c := .Categories}}{{if $i}}、{{end}}{{$c}}{{end}}）的意见，没有则为 null；不用的字段为 null。
-    需要核对代码或设计书时用 pm_proxy_read，查阅议题用 pm_read_issue。pm_vote 成功即结束本任务。
-  continue: 你还没有成功调用 pm_vote。审查决策表的每一行，调用 pm_vote 交出本席位的票；若工具返回错误，按错误修正后重试。
+    需要核对代码或设计书时用 meerkat_proxy_read，查阅议题用 meerkat_read_issue。meerkat_vote 成功即结束本任务。
+  continue: 你还没有成功调用 meerkat_vote。审查决策表的每一行，调用 meerkat_vote 交出本席位的票；若工具返回错误，按错误修正后重试。
   resume: |
     你之前对议题 {{.Ref}} 决策表第 {{.Version}} 版投票的会话被中止，现已恢复。
-    接着完成审查，调用 pm_vote 交出本席位的票，成功即结束本任务。
+    接着完成审查，调用 meerkat_vote 交出本席位的票，成功即结束本任务。
 revise:
-  goalTools: [pm_draft]
+  goalTools: [meerkat_draft]
   opening: |
     你在修订议题 {{.Ref}}（议程编号 {{.Agenda}}）的决策表：这是第 {{.Round}} 轮（最多 {{.MaxRounds}} 轮），交出第 {{.Version}} 版。
 
@@ -53,7 +53,7 @@ revise:
     议题正文：
     {{.Body}}
 
-    当前决策表（pm:draft 标记的 JSON）：
+    当前决策表（meerkat:draft 标记的 JSON）：
     {{.Draft}}
 
     反对票给出的反例：
@@ -62,26 +62,26 @@ revise:
     这个议题由实现 issue {{.Escalation.Issue}} 上的询问（评论 {{.Escalation.Ask}}）提出。询问原文：
     {{.Escalation.AskText}}
 
-    pm_draft 必须给出 settle：kind 为 reply（定案后答复这条询问，text 是答复正文）或 replace（定案后另开 issue 取代该实现 issue）。
+    meerkat_draft 必须给出 settle：kind 为 reply（定案后答复这条询问，text 是答复正文）或 replace（定案后另开 issue 取代该实现 issue）。
     {{end}}
     步骤：
-    1. 逐条核实反例；需要时用 pm_proxy_read 查代码或设计书，用 pm_read_issue 查阅议题。
-    2. 调用 pm_draft 交出修订后的决策表：回应每条反例，修改或删去相应的行；原有行沿用原 id，新增行接着编号；category 取以下之一：{{range $i, $c := .Categories}}{{if $i}}、{{end}}{{$c}}{{end}}；其余字段的要求与起草时相同（行有实现 issue 时给 deliver，repo、title、body 去首尾空白后都不能为空；行只要设计结论时整行不要 deliver 字段，连键都不传）；withdrawn 为 null。
+    1. 逐条核实反例；需要时用 meerkat_proxy_read 查代码或设计书，用 meerkat_read_issue 查阅议题。
+    2. 调用 meerkat_draft 交出修订后的决策表：回应每条反例，修改或删去相应的行；原有行沿用原 id，新增行接着编号；category 取以下之一：{{range $i, $c := .Categories}}{{if $i}}、{{end}}{{$c}}{{end}}；其余字段的要求与起草时相同（行有实现 issue 时给 deliver，repo、title、body 去首尾空白后都不能为空；行只要设计结论时整行不要 deliver 字段，连键都不传）；withdrawn 为 null。
     3. 若反例表明这个议题不应再做，改为撤回：rows 照抄当前决策表，withdrawn 写撤回理由。
 
-    pm_draft 成功即结束本任务。
-  continue: 你还没有成功调用 pm_draft。回应反例后调用 pm_draft 交出修订版（或以 withdrawn 撤回），结束本任务；若工具返回错误，按错误修正后重试。
+    meerkat_draft 成功即结束本任务。
+  continue: 你还没有成功调用 meerkat_draft。回应反例后调用 meerkat_draft 交出修订版（或以 withdrawn 撤回），结束本任务；若工具返回错误，按错误修正后重试。
   resume: |
     你之前修订议题 {{.Ref}} 决策表第 {{.Version}} 版的会话被中止，现已恢复。
-    接着之前的进度完成修订，调用 pm_draft 交出修订版（或以 withdrawn 撤回），成功即结束本任务。
+    接着之前的进度完成修订，调用 meerkat_draft 交出修订版（或以 withdrawn 撤回），成功即结束本任务。
 arbitrate:
-  goalTools: [pm_ruling]
+  goalTools: [meerkat_ruling]
   opening: |
     你在为议题 {{.Ref}}（议程编号 {{.Agenda}}）决策表第 {{.Version}} 版仲裁分类争议。
 
     议题标题：{{.Title}}
 
-    决策表（pm:draft 标记的 JSON）：
+    决策表（meerkat:draft 标记的 JSON）：
     {{.Draft}}
 
     有争议的行：
@@ -91,11 +91,11 @@ arbitrate:
     可用的分类：{{range $i, $c := .Categories}}{{if $i}}、{{end}}{{$c}}{{end}}
 
     步骤：
-    1. 需要时用 pm_read_issue 读被引用的议题，用 pm_proxy_read 核对实现或设计书。
-    2. 调用 pm_ruling：rows 恰为上面每一条有争议的行，每行一次，category 取可用的分类之一。
+    1. 需要时用 meerkat_read_issue 读被引用的议题，用 meerkat_proxy_read 核对实现或设计书。
+    2. 调用 meerkat_ruling：rows 恰为上面每一条有争议的行，每行一次，category 取可用的分类之一。
 
-    pm_ruling 成功即结束本任务。
-  continue: 你还没有成功调用 pm_ruling。为每一条有争议的行给出分类，调用 pm_ruling 结束本任务；若工具返回错误，按错误修正后重试。
+    meerkat_ruling 成功即结束本任务。
+  continue: 你还没有成功调用 meerkat_ruling。为每一条有争议的行给出分类，调用 meerkat_ruling 结束本任务；若工具返回错误，按错误修正后重试。
   resume: |
     你之前为议题 {{.Ref}} 决策表第 {{.Version}} 版仲裁的会话被中止，现已恢复。
-    接着完成仲裁，调用 pm_ruling 给出分类，成功即结束本任务。
+    接着完成仲裁，调用 meerkat_ruling 给出分类，成功即结束本任务。

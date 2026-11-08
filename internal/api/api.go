@@ -1,5 +1,5 @@
-// Package api serves the daemon's HTTP API: contract §4 (health, sessions), §C (queue), the event
-// endpoint the council webhook entry point forwards issue events to, and the configuration report and check.
+// Package api serves the daemon's HTTP API: health, sessions and the queue, the event endpoint
+// the council webhook entry point forwards issue events to, and the configuration report and check.
 package api
 
 import (
@@ -40,13 +40,13 @@ type Server struct {
 	sessions    *sessions.Registry
 	goals       config.Goals
 	loaded      config.Loaded
-	pmRepo      string
+	agendaRepo  string
 	sessionsDir string
 	startedAt   time.Time
 }
 
-func New(d Daemon, reg *sessions.Registry, goals config.Goals, loaded config.Loaded, pmRepo, sessionsDir string, startedAt time.Time) *Server {
-	return &Server{daemon: d, sessions: reg, goals: goals, loaded: loaded, pmRepo: pmRepo, sessionsDir: sessionsDir, startedAt: startedAt}
+func New(d Daemon, reg *sessions.Registry, goals config.Goals, loaded config.Loaded, agendaRepo, sessionsDir string, startedAt time.Time) *Server {
+	return &Server{daemon: d, sessions: reg, goals: goals, loaded: loaded, agendaRepo: agendaRepo, sessionsDir: sessionsDir, startedAt: startedAt}
 }
 
 // Handler returns the API routes wrapped with CORS headers.
@@ -119,8 +119,8 @@ func (s *Server) event(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo, n, ok := queue.ParseRef(ev.Issue)
-	if !ok || !strings.EqualFold(repo, s.pmRepo) {
-		writeError(w, http.StatusBadRequest, "invalid_request", "issue must be "+s.pmRepo+"#<n>")
+	if !ok || !strings.EqualFold(repo, s.agendaRepo) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "issue must be "+s.agendaRepo+"#<n>")
 		return
 	}
 	slog.Info("event", "issue", ev.Issue, "event", ev.Event, "action", ev.Action)

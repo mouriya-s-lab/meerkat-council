@@ -11,26 +11,26 @@ import (
 
 const done = `{"type":"title","v":1,"title":""}
 {"type":"session","version":3,"id":"s-done","timestamp":"2026-11-06T21:30:15.000Z","cwd":"/x"}
-{"type":"custom","customType":"pm-meta","data":{"kind":"vote","seat":"Argon","model":"m/a","ref":"o/pm#1","round":1,"version":1},"id":"a","timestamp":"2026-11-06T21:30:15.100Z"}
-{"type":"message","id":"b","timestamp":"2026-11-06T21:30:16.000Z","message":{"role":"toolResult","toolName":"pm_vote","isError":true}}
-{"type":"message","id":"c","timestamp":"2026-11-06T21:30:17.000Z","message":{"role":"toolResult","toolName":"pm_vote","isError":false}}
+{"type":"custom","customType":"meerkat-meta","data":{"kind":"vote","seat":"Argon","model":"m/a","ref":"o/agenda#1","round":1,"version":1},"id":"a","timestamp":"2026-11-06T21:30:15.100Z"}
+{"type":"message","id":"b","timestamp":"2026-11-06T21:30:16.000Z","message":{"role":"toolResult","toolName":"meerkat_vote","isError":true}}
+{"type":"message","id":"c","timestamp":"2026-11-06T21:30:17.000Z","message":{"role":"toolResult","toolName":"meerkat_vote","isError":false}}
 `
 
 const failed = `{"type":"session","version":3,"id":"s-failed","timestamp":"2026-11-06T22:00:00.000Z","cwd":"/x"}
-{"type":"custom","customType":"pm-meta","data":{"kind":"draft","seat":"Coordination","model":"m/a","ref":"o/pm#2","round":1,"version":1},"id":"a","timestamp":"2026-11-06T22:00:00.100Z"}
+{"type":"custom","customType":"meerkat-meta","data":{"kind":"draft","seat":"Coordination","model":"m/a","ref":"o/agenda#2","round":1,"version":1},"id":"a","timestamp":"2026-11-06T22:00:00.100Z"}
 {"type":"message","id":"b","timestamp":"2026-11-06T22:00:01.000Z","message":{"role":"assistant","errorMessage":"429 rate limited"}}
 `
 
 const noGoal = `{"type":"session","version":3,"id":"s-nogoal","timestamp":"2026-11-06T22:30:00.000Z","cwd":"/x"}
-{"type":"custom","customType":"pm-meta","data":{"kind":"draft","seat":"Coordination","model":"m/a","ref":"o/pm#2","round":1,"version":1},"id":"a","timestamp":"2026-11-06T22:30:00.100Z"}
-{"type":"message","id":"b","timestamp":"2026-11-06T22:30:01.000Z","message":{"role":"toolResult","toolName":"pm_read_issue","isError":false}}
+{"type":"custom","customType":"meerkat-meta","data":{"kind":"draft","seat":"Coordination","model":"m/a","ref":"o/agenda#2","round":1,"version":1},"id":"a","timestamp":"2026-11-06T22:30:00.100Z"}
+{"type":"message","id":"b","timestamp":"2026-11-06T22:30:01.000Z","message":{"role":"toolResult","toolName":"meerkat_read_issue","isError":false}}
 `
 
 // A fork copies its parent's history, the goal tool result included, before its own header
 // timestamp; that copy does not make the fork done.
 const fork = `{"type":"session","version":3,"id":"s-fork","parentSession":"s-done","timestamp":"2026-11-06T23:00:00.000Z","cwd":"/x"}
-{"type":"custom","customType":"pm-meta","data":{"kind":"vote","seat":"Argon","model":"m/a","ref":"o/pm#1","round":1,"version":1},"id":"a","timestamp":"2026-11-06T21:30:15.100Z"}
-{"type":"message","id":"c","timestamp":"2026-11-06T21:30:17.000Z","message":{"role":"toolResult","toolName":"pm_vote","isError":false}}
+{"type":"custom","customType":"meerkat-meta","data":{"kind":"vote","seat":"Argon","model":"m/a","ref":"o/agenda#1","round":1,"version":1},"id":"a","timestamp":"2026-11-06T21:30:15.100Z"}
+{"type":"message","id":"c","timestamp":"2026-11-06T21:30:17.000Z","message":{"role":"toolResult","toolName":"meerkat_vote","isError":false}}
 {"type":"message","id":"d","timestamp":"2026-11-06T23:00:01.000Z","message":{"role":"user","content":[]}}
 `
 
@@ -52,7 +52,7 @@ func TestList(t *testing.T) {
 	if err := RecordFailure(filepath.Join(dir, "2", "failed.jsonl"), failureRecord{Reason: "omp exited", At: failedAt}); err != nil {
 		t.Fatal(err)
 	}
-	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"pm_draft"}}, Vote: config.Goal{GoalTools: []string{"pm_vote"}}}
+	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"meerkat_draft"}}, Vote: config.Goal{GoalTools: []string{"meerkat_vote"}}}
 	reg := NewRegistry()
 
 	list, err := reg.List(dir, goals, 10)
@@ -72,8 +72,8 @@ func TestList(t *testing.T) {
 	if f.ID != "s-failed" || f.State != StateFailed || f.Error == nil || *f.Error != "omp exited" {
 		t.Errorf("failed = %+v", f)
 	}
-	if d.ID != "s-done" || d.State != StateDone || d.Kind != config.KindVote || d.Label != "vote Argon o/pm#1" ||
-		d.Ref == nil || *d.Ref != "o/pm#1" || d.EndedAt == nil || d.Model != "m/a" || d.Error != nil || d.Parent != nil {
+	if d.ID != "s-done" || d.State != StateDone || d.Kind != config.KindVote || d.Label != "vote Argon o/agenda#1" ||
+		d.Ref == nil || *d.Ref != "o/agenda#1" || d.EndedAt == nil || d.Model != "m/a" || d.Error != nil || d.Parent != nil {
 		t.Errorf("done = %+v", d)
 	}
 
@@ -121,7 +121,7 @@ func TestListDerivesState(t *testing.T) {
 	if b, err := os.ReadFile(FailurePath(failedFile)); err != nil || string(b) != `{"reason":"omp exited","at":"2026-11-06T22:00:05.005Z"}` {
 		t.Fatalf("failure record = %s, %v", b, err)
 	}
-	goals := config.Goals{Vote: config.Goal{GoalTools: []string{"pm_vote"}}}
+	goals := config.Goals{Vote: config.Goal{GoalTools: []string{"meerkat_vote"}}}
 	list, err := NewRegistry().List(dir, goals, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -149,11 +149,11 @@ func TestListOrphanFailureRecord(t *testing.T) {
 	file := filepath.Join(dir, "3", "voted.jsonl")
 	if err := RecordFailure(file, failureRecord{
 		Reason: "context canceled", At: failedAt, ID: "s-orphan",
-		Kind: config.KindVote, Seat: "Argon", Ref: "o/pm#7", Model: "m/a", StartedAt: started,
+		Kind: config.KindVote, Seat: "Argon", Ref: "o/agenda#7", Model: "m/a", StartedAt: started,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	goals := config.Goals{Vote: config.Goal{GoalTools: []string{"pm_vote"}}}
+	goals := config.Goals{Vote: config.Goal{GoalTools: []string{"meerkat_vote"}}}
 	list, err := NewRegistry().List(dir, goals, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -166,13 +166,13 @@ func TestListOrphanFailureRecord(t *testing.T) {
 		s.StartedAt.IsZero() || !s.StartedAt.Equal(started) ||
 		s.EndedAt == nil || !s.EndedAt.Equal(failedAt) ||
 		s.Error == nil || *s.Error != "context canceled" ||
-		s.Ref == nil || *s.Ref != "o/pm#7" || s.Label != "vote Argon o/pm#7" {
+		s.Ref == nil || *s.Ref != "o/agenda#7" || s.Label != "vote Argon o/agenda#7" {
 		t.Errorf("orphan = %+v", s)
 	}
 }
 
 // A failure record beside its session file does not add a second row, and the .jsonl's own
-// pm-meta still wins over the record: the listing keeps the behavior it had before.
+// meerkat-meta still wins over the record: the listing keeps the behavior it had before.
 func TestListFailureRecordWithSessionFile(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "2", "failed.jsonl")
@@ -185,11 +185,11 @@ func TestListFailureRecordWithSessionFile(t *testing.T) {
 	failedAt := time.Date(2026, 11, 6, 22, 0, 5, 5e6, time.UTC)
 	if err := RecordFailure(p, failureRecord{
 		Reason: "omp exited", At: failedAt, ID: "s-wrong",
-		Kind: config.KindVote, Seat: "Argon", Ref: "o/pm#9", Model: "m/other", StartedAt: failedAt,
+		Kind: config.KindVote, Seat: "Argon", Ref: "o/agenda#9", Model: "m/other", StartedAt: failedAt,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"pm_draft"}}, Vote: config.Goal{GoalTools: []string{"pm_vote"}}}
+	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"meerkat_draft"}}, Vote: config.Goal{GoalTools: []string{"meerkat_vote"}}}
 	list, err := NewRegistry().List(dir, goals, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -199,9 +199,9 @@ func TestListFailureRecordWithSessionFile(t *testing.T) {
 	}
 	s := list[0]
 	if s.ID != "s-failed" || s.State != StateFailed || s.Kind != config.KindDraft ||
-		s.Label != "draft Coordination o/pm#2" || s.Model != "m/a" ||
+		s.Label != "draft Coordination o/agenda#2" || s.Model != "m/a" ||
 		s.Error == nil || *s.Error != "omp exited" ||
-		s.Ref == nil || *s.Ref != "o/pm#2" ||
+		s.Ref == nil || *s.Ref != "o/agenda#2" ||
 		s.EndedAt == nil || !s.EndedAt.Equal(failedAt) {
 		t.Errorf("both present = %+v", s)
 	}
@@ -222,7 +222,7 @@ func TestListOldFormatFailureRecord(t *testing.T) {
 	if err := os.WriteFile(FailurePath(p), []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"pm_draft"}}}
+	goals := config.Goals{Draft: config.Goal{GoalTools: []string{"meerkat_draft"}}}
 	list, err := NewRegistry().List(dir, goals, 10)
 	if err != nil {
 		t.Fatal(err)

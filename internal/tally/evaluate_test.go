@@ -22,7 +22,7 @@ var (
 		MaxRounds:   2,
 		Categories:  []string{"intent", "tech"},
 	}
-	testHumans = []string{"o/pm#9"}
+	testHumans = []string{"o/agenda#9"}
 )
 
 func row(id, category string, missingDesign bool) markers.Row {
@@ -98,7 +98,7 @@ func TestEvaluate(t *testing.T) {
 			draft: draft(r1), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-01")), ballot("Hi", 1, approve("D1-01")),
-				ballot("Ve", 1, veto("D1-01", "o/pm#3")), ballot("Ar", 1, veto("D1-01", "o/pm#9")),
+				ballot("Ve", 1, veto("D1-01", "o/agenda#3")), ballot("Ar", 1, veto("D1-01", "o/agenda#9")),
 			},
 			want: decided(rejected("D1-01", 2, "approve 2 below threshold 3")),
 		},
@@ -107,25 +107,25 @@ func TestEvaluate(t *testing.T) {
 			draft: draft(r1), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-01")), ballot("Hi", 1, approve("D1-01")),
-				ballot("Ve", 1, veto("D1-01", "o/pm#9")), ballot("Ar", 1, approve("D1-01")),
+				ballot("Ve", 1, veto("D1-01", "o/agenda#9")), ballot("Ar", 1, approve("D1-01")),
 			},
-			want: decided(rejected("D1-01", 3, "veto by Ve citing o/pm#9")),
+			want: decided(rejected("D1-01", 3, "veto by Ve citing o/agenda#9")),
 		},
 		{
 			name:  "human citation compares case-insensitively",
 			draft: draft(r1), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-01")), ballot("Hi", 1, approve("D1-01")),
-				ballot("Ve", 1, veto("D1-01", " O/PM#9 ")), ballot("Ar", 1, approve("D1-01")),
+				ballot("Ve", 1, veto("D1-01", " O/AGENDA#9 ")), ballot("Ar", 1, approve("D1-01")),
 			},
-			want: decided(rejected("D1-01", 3, "veto by Ve citing  O/PM#9 ")),
+			want: decided(rejected("D1-01", 3, "veto by Ve citing  O/AGENDA#9 ")),
 		},
 		{
 			name:  "veto citing an agenda issue does not stand and counts neither way",
 			draft: draft(r1), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-01")), ballot("Hi", 1, approve("D1-01")),
-				ballot("Ve", 1, veto("D1-01", "o/pm#3")), ballot("Ar", 1, approve("D1-01")),
+				ballot("Ve", 1, veto("D1-01", "o/agenda#3")), ballot("Ar", 1, approve("D1-01")),
 			},
 			want: decided(passed("D1-01", 3)),
 		},
@@ -134,35 +134,35 @@ func TestEvaluate(t *testing.T) {
 			draft: draft(row("D1-01", "tech", true)), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-01")), ballot("Hi", 1, approve("D1-01")),
-				ballot("Ve", 1, veto("D1-01", "o/pm#9")), ballot("Ar", 1, approve("D1-01")),
+				ballot("Ve", 1, veto("D1-01", "o/agenda#9")), ballot("Ar", 1, approve("D1-01")),
 			},
-			want: decided(rejected("D1-01", 3, "veto by Ve citing o/pm#9")),
+			want: decided(rejected("D1-01", 3, "veto by Ve citing o/agenda#9")),
 		},
 		{
 			name:  "veto seat vetoes a non-veto category without a ruling: arbitrate",
 			draft: draft(r1, r2), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-01"), approve("D1-02")), ballot("Hi", 1, approve("D1-01"), approve("D1-02")),
-				ballot("Ve", 1, approve("D1-01"), veto("D1-02", "o/pm#9")), ballot("Ar", 1, approve("D1-01"), approve("D1-02")),
+				ballot("Ve", 1, approve("D1-01"), veto("D1-02", "o/agenda#9")), ballot("Ar", 1, approve("D1-01"), approve("D1-02")),
 			},
-			want: Arbitrate{Disputes: []Dispute{{Row: r2, Seat: "Ve", Citation: new("o/pm#9"), Classification: new("tech")}}},
+			want: Arbitrate{Disputes: []Dispute{{Row: r2, Seat: "Ve", Citation: new("o/agenda#9"), Classification: new("tech")}}},
 		},
 		{
 			name:  "a ruling on another version does not settle the dispute",
 			draft: draft(r2), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-02")), ballot("Hi", 1, approve("D1-02")),
-				ballot("Ve", 1, veto("D1-02", "o/pm#9")), ballot("Ar", 1, approve("D1-02")),
+				ballot("Ve", 1, veto("D1-02", "o/agenda#9")), ballot("Ar", 1, approve("D1-02")),
 			},
 			rulings: []markers.Ruling{ruling(2, "D1-02", "tech")},
-			want:    Arbitrate{Disputes: []Dispute{{Row: r2, Seat: "Ve", Citation: new("o/pm#9"), Classification: new("tech")}}},
+			want:    Arbitrate{Disputes: []Dispute{{Row: r2, Seat: "Ve", Citation: new("o/agenda#9"), Classification: new("tech")}}},
 		},
 		{
 			name:  "ruled outside the veto categories: veto void, no second arbitration",
 			draft: draft(r2), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-02")), ballot("Hi", 1, approve("D1-02")),
-				ballot("Ve", 1, veto("D1-02", "o/pm#9")), ballot("Ar", 1, approve("D1-02")),
+				ballot("Ve", 1, veto("D1-02", "o/agenda#9")), ballot("Ar", 1, approve("D1-02")),
 			},
 			rulings: []markers.Ruling{ruling(1, "D1-02", "tech")},
 			want:    decided(passed("D1-02", 3)),
@@ -172,17 +172,17 @@ func TestEvaluate(t *testing.T) {
 			draft: draft(r2), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-02")), ballot("Hi", 1, approve("D1-02")),
-				ballot("Ve", 1, veto("D1-02", "o/pm#9")), ballot("Ar", 1, approve("D1-02")),
+				ballot("Ve", 1, veto("D1-02", "o/agenda#9")), ballot("Ar", 1, approve("D1-02")),
 			},
 			rulings: []markers.Ruling{ruling(1, "D1-02", "intent")},
-			want:    decided(rejected("D1-02", 3, "veto by Ve citing o/pm#9")),
+			want:    decided(rejected("D1-02", 3, "veto by Ve citing o/agenda#9")),
 		},
 		{
 			name:  "the latest ruling of a row wins",
 			draft: draft(r2), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-02")), ballot("Hi", 1, approve("D1-02")),
-				ballot("Ve", 1, veto("D1-02", "o/pm#9")), ballot("Ar", 1, approve("D1-02")),
+				ballot("Ve", 1, veto("D1-02", "o/agenda#9")), ballot("Ar", 1, approve("D1-02")),
 			},
 			rulings: []markers.Ruling{ruling(1, "D1-02", "intent"), ruling(1, "D1-02", "tech")},
 			want:    decided(passed("D1-02", 3)),
@@ -192,7 +192,7 @@ func TestEvaluate(t *testing.T) {
 			draft: draft(r2), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-02")), ballot("Hi", 1, approve("D1-02")),
-				ballot("Ve", 1, veto("D1-02", "o/pm#3")), ballot("Ar", 1, approve("D1-02")),
+				ballot("Ve", 1, veto("D1-02", "o/agenda#3")), ballot("Ar", 1, approve("D1-02")),
 			},
 			rulings: []markers.Ruling{ruling(1, "D1-02", "intent")},
 			want:    decided(passed("D1-02", 3)),
@@ -202,7 +202,7 @@ func TestEvaluate(t *testing.T) {
 			draft: draft(r2), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-02")), ballot("Hi", 1, approve("D1-02")),
-				ballot("Ve", 1, approve("D1-02")), ballot("Ar", 1, veto("D1-02", "o/pm#9")),
+				ballot("Ve", 1, approve("D1-02")), ballot("Ar", 1, veto("D1-02", "o/agenda#9")),
 			},
 			want: decided(passed("D1-02", 3)),
 		},
@@ -238,18 +238,18 @@ func TestEvaluate(t *testing.T) {
 			draft: draft(r1, r2), round: 1,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-01"), approve("D1-02")), ballot("Hi", 1, oppose("D1-01", "breaks x"), approve("D1-02")),
-				ballot("Ve", 1, approve("D1-01"), veto("D1-02", "o/pm#9")), ballot("Ar", 1, approve("D1-01"), approve("D1-02")),
+				ballot("Ve", 1, approve("D1-01"), veto("D1-02", "o/agenda#9")), ballot("Ar", 1, approve("D1-01"), approve("D1-02")),
 			},
-			want: Arbitrate{Disputes: []Dispute{{Row: r2, Seat: "Ve", Citation: new("o/pm#9"), Classification: new("tech")}}},
+			want: Arbitrate{Disputes: []Dispute{{Row: r2, Seat: "Ve", Citation: new("o/agenda#9"), Classification: new("tech")}}},
 		},
 		{
 			name:  "a standing veto decides its row even when another row is opposed",
 			draft: draft(r1, r2), round: 2,
 			votes: []markers.Vote{
 				ballot("Dr", 1, approve("D1-01"), approve("D1-02")), ballot("Hi", 1, approve("D1-01"), oppose("D1-02", "y")),
-				ballot("Ve", 1, veto("D1-01", "o/pm#9"), approve("D1-02")), ballot("Ar", 1, approve("D1-01"), approve("D1-02")),
+				ballot("Ve", 1, veto("D1-01", "o/agenda#9"), approve("D1-02")), ballot("Ar", 1, approve("D1-01"), approve("D1-02")),
 			},
-			want: decided(rejected("D1-01", 3, "veto by Ve citing o/pm#9"), rejected("D1-02", 3, "revision limit 2 reached")),
+			want: decided(rejected("D1-01", 3, "veto by Ve citing o/agenda#9"), rejected("D1-02", 3, "revision limit 2 reached")),
 		},
 		{
 			name:  "withdrawn draft: every row withdrawn",

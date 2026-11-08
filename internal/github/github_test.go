@@ -28,7 +28,7 @@ func stubComments(t *testing.T, bodies []string) (*Client, func()) {
 			fmt.Fprintf(w, `[{"body":%q,"created_at":"2026-11-07T12:00:03Z"}]`, bodies[2])
 			return
 		}
-		w.Header().Set("Link", fmt.Sprintf(`<%s/repos/o/pm/issues/1/comments?per_page=100&page=2>; rel="next"`, srv.URL))
+		w.Header().Set("Link", fmt.Sprintf(`<%s/repos/o/agenda/issues/1/comments?per_page=100&page=2>; rel="next"`, srv.URL))
 		fmt.Fprintf(w, `[{"body":%q,"created_at":"2026-11-07T12:00:01Z"},{"body":%q,"created_at":"2026-11-07T12:00:02Z"}]`, bodies[0], bodies[1])
 	}))
 	u, err := url.Parse(srv.URL)
@@ -62,12 +62,12 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestEachCommentStreamsPages(t *testing.T) {
-	bodies := []string{"first", "second <!-- pm:superseded {\"v\":1,\"by\":\"o/pm#9\"} -->", "third"}
+	bodies := []string{"first", "second <!-- meerkat:superseded {\"v\":1,\"by\":\"o/agenda#9\"} -->", "third"}
 	c, close := stubComments(t, bodies)
 	defer close()
 	var got []string
 	var ats []time.Time
-	if err := c.EachComment(context.Background(), "o/pm", 1, func(body string, at time.Time) error {
+	if err := c.EachComment(context.Background(), "o/agenda", 1, func(body string, at time.Time) error {
 		got = append(got, body)
 		ats = append(ats, at)
 		return nil
@@ -87,13 +87,13 @@ func TestEachCommentStreamsPages(t *testing.T) {
 func TestCommentMarkersSkipsNonMarkers(t *testing.T) {
 	bodies := []string{
 		"plain discussion",
-		"with marker\n\n<!-- pm:superseded {\"v\":1,\"by\":\"o/pm#9\"} -->",
-		"<!-- pm:ask {\"v\":1} -->", // malformed for the council: skipped
+		"with marker\n\n<!-- meerkat:superseded {\"v\":1,\"by\":\"o/agenda#9\"} -->",
+		"<!-- meerkat:ask {\"v\":1} -->", // malformed for the council: skipped
 	}
 	c, close := stubComments(t, bodies)
 	defer close()
 	count := 0
-	if err := c.CommentMarkers(context.Background(), "o/pm", 1, func(m markers.Marker) error {
+	if err := c.CommentMarkers(context.Background(), "o/agenda", 1, func(m markers.Marker) error {
 		count++
 		return nil
 	}); err != nil {

@@ -11,7 +11,7 @@ import (
 	"github.com/mouriya-s-lab/meerkat-council/internal/markers"
 )
 
-const repo = "o/pm"
+const repo = "o/agenda"
 
 func ref(n int) Ref { return FormatRef(repo, n) }
 
@@ -108,7 +108,7 @@ func TestStates(t *testing.T) {
 		{
 			name: "decided beats superseded",
 			issues: []Issue{
-				issue(1, KindAgenda, StatusDone, "D1", markers.Superseded{By: "o/pm#9"}),
+				issue(1, KindAgenda, StatusDone, "D1", markers.Superseded{By: "o/agenda#9"}),
 			},
 			want: map[Ref]State{ref(1): StateDecided},
 		},

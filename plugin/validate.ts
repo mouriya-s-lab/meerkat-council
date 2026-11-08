@@ -1,5 +1,5 @@
 /**
- * Validation shared by the pm_draft tool and the publish path's pre-CreateIssue check duty: a
+ * Validation shared by the meerkat_draft tool and the publish path's pre-CreateIssue check duty: a
  * present `deliver` must carry a non-blank repo, title and body; undefined/null mean no delivery.
  */
 

@@ -46,7 +46,7 @@ func (Decide) outcome()    {}
 
 // Evaluate tallies the votes on draft in round. Only votes and rulings on the draft's version
 // count; a later vote of a seat or ruling of a row replaces an earlier one. humanRefs are the
-// human issues of the PM repository, the only citations a veto can stand on.
+// human issues of the agenda repository, the only citations a veto can stand on.
 //
 // Per row: a standing veto (a veto seat citing a human issue on a row whose effective category,
 // the ruling's or else the draft's, is a veto category, or that misses design) rejects it; a veto

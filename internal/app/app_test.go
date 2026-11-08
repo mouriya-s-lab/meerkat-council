@@ -60,23 +60,23 @@ func TestWebhook(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer daemon.Close()
-	h := New(secret, "o/pm", daemon.URL+"/").Handler()
+	h := New(secret, "o/agenda", daemon.URL+"/").Handler()
 
-	issues := `{"action":"opened","issue":{"number":7},"repository":{"full_name":"o/pm"}}`
+	issues := `{"action":"opened","issue":{"number":7},"repository":{"full_name":"o/agenda"}}`
 	for _, tc := range []struct {
 		name, event, body, sig string
 		want                   int
 		forward                *api.Event
 	}{
-		{"issues forwarded", "issues", issues, sign(issues), 202, &api.Event{Issue: "o/pm#7", Event: "issues", Action: "opened"}},
+		{"issues forwarded", "issues", issues, sign(issues), 202, &api.Event{Issue: "o/agenda#7", Event: "issues", Action: "opened"}},
 		{"tampered body", "issues", strings.Replace(issues, "7", "8", 1), sign(issues), 401, nil},
 		{"missing signature", "issues", issues, "", 401, nil},
 		{"ping", "ping", `{"zen":"x"}`, sign(`{"zen":"x"}`), 200, nil},
 		{"other repo", "issues", `{"action":"opened","issue":{"number":7},"repository":{"full_name":"o/other"}}`, sign(`{"action":"opened","issue":{"number":7},"repository":{"full_name":"o/other"}}`), 202, nil},
-		{"other event", "push", `{"repository":{"full_name":"o/pm"}}`, sign(`{"repository":{"full_name":"o/pm"}}`), 202, nil},
-		{"comment", "issue_comment", `{"action":"created","issue":{"number":3},"repository":{"full_name":"o/pm"}}`, sign(`{"action":"created","issue":{"number":3},"repository":{"full_name":"o/pm"}}`), 202, &api.Event{Issue: "o/pm#3", Event: "issue_comment", Action: "created"}},
-		{"dependency uses blocked_issue", "issue_dependencies", `{"action":"blocked_by_added","blocked_issue":{"number":5},"blocking_issue":{"number":4},"repository":{"full_name":"o/pm"}}`, sign(`{"action":"blocked_by_added","blocked_issue":{"number":5},"blocking_issue":{"number":4},"repository":{"full_name":"o/pm"}}`), 202, &api.Event{Issue: "o/pm#5", Event: "issue_dependencies", Action: "blocked_by_added"}},
-		{"sub issue uses parent_issue", "sub_issues", `{"action":"sub_issue_added","parent_issue":{"number":2},"sub_issue":{"number":9},"repository":{"full_name":"o/pm"}}`, sign(`{"action":"sub_issue_added","parent_issue":{"number":2},"sub_issue":{"number":9},"repository":{"full_name":"o/pm"}}`), 202, &api.Event{Issue: "o/pm#2", Event: "sub_issues", Action: "sub_issue_added"}},
+		{"other event", "push", `{"repository":{"full_name":"o/agenda"}}`, sign(`{"repository":{"full_name":"o/agenda"}}`), 202, nil},
+		{"comment", "issue_comment", `{"action":"created","issue":{"number":3},"repository":{"full_name":"o/agenda"}}`, sign(`{"action":"created","issue":{"number":3},"repository":{"full_name":"o/agenda"}}`), 202, &api.Event{Issue: "o/agenda#3", Event: "issue_comment", Action: "created"}},
+		{"dependency uses blocked_issue", "issue_dependencies", `{"action":"blocked_by_added","blocked_issue":{"number":5},"blocking_issue":{"number":4},"repository":{"full_name":"o/agenda"}}`, sign(`{"action":"blocked_by_added","blocked_issue":{"number":5},"blocking_issue":{"number":4},"repository":{"full_name":"o/agenda"}}`), 202, &api.Event{Issue: "o/agenda#5", Event: "issue_dependencies", Action: "blocked_by_added"}},
+		{"sub issue uses parent_issue", "sub_issues", `{"action":"sub_issue_added","parent_issue":{"number":2},"sub_issue":{"number":9},"repository":{"full_name":"o/agenda"}}`, sign(`{"action":"sub_issue_added","parent_issue":{"number":2},"sub_issue":{"number":9},"repository":{"full_name":"o/agenda"}}`), 202, &api.Event{Issue: "o/agenda#2", Event: "sub_issues", Action: "sub_issue_added"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mu.Lock()
@@ -107,8 +107,8 @@ func TestWebhook(t *testing.T) {
 func TestWebhookDaemonDown(t *testing.T) {
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	daemon.Close()
-	h := New(secret, "o/pm", daemon.URL).Handler()
-	body := `{"action":"opened","issue":{"number":7},"repository":{"full_name":"o/pm"}}`
+	h := New(secret, "o/agenda", daemon.URL).Handler()
+	body := `{"action":"opened","issue":{"number":7},"repository":{"full_name":"o/agenda"}}`
 	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "issues")
 	req.Header.Set("X-Hub-Signature-256", sign(body))

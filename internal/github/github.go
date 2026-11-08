@@ -1,4 +1,4 @@
-// Package github reads and writes the PM and code repositories (issues, comments, sub-issues, Git
+// Package github reads and writes the agenda and code repositories (issues, comments, sub-issues, Git
 // Data) and the Project through the go-gh REST and GraphQL clients. Field and option node ids are
 // resolved by name at startup.
 package github

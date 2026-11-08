@@ -1,5 +1,5 @@
 // Package sessions runs council seat sessions and derives session records from the omp session
-// files under the sessions directory (contract §4).
+// files under the sessions directory.
 package sessions
 
 import (
@@ -23,7 +23,7 @@ import (
 	"github.com/mouriya-s-lab/meerkat-council/internal/config"
 )
 
-// Meta is the pm-meta custom entry the council plugin appends at session start.
+// Meta is the meerkat-meta custom entry the council plugin appends at session start.
 type Meta struct {
 	Kind    config.SessionKind `json:"kind"`
 	Seat    string             `json:"seat"`
@@ -42,7 +42,7 @@ type File struct {
 	ParentSession string
 	StartedAt     time.Time
 	LastAt        time.Time
-	Meta          *Meta                // latest pm-meta entry
+	Meta          *Meta                // latest meerkat-meta entry
 	ToolOK        map[string]time.Time // tool name -> timestamp of its latest successful tool result
 	LastError     string               // errorMessage of the latest assistant message that failed
 	Failure       string               // why the program's run of this session failed; see FailurePath
@@ -69,7 +69,7 @@ type failureRecord struct {
 // writes the session file and stops writing it when killed; the program owns this record, so the
 // reason and the end time outlive the process.
 func FailurePath(sessionFile string) string {
-	return strings.TrimSuffix(sessionFile, ".jsonl") + ".pm-failure.json"
+	return strings.TrimSuffix(sessionFile, ".jsonl") + ".meerkat-failure.json"
 }
 
 // ErrShutdown is the cancel cause of a daemon stop. Shutdown carries the time of the cancel.
@@ -177,7 +177,7 @@ func ParseFile(path string) (*File, error) {
 		if ts.After(f.LastAt) {
 			f.LastAt = ts
 		}
-		if e.Type == "custom" && e.CustomType == "pm-meta" {
+		if e.Type == "custom" && e.CustomType == "meerkat-meta" {
 			var m Meta
 			if json.Unmarshal(e.Data, &m) == nil {
 				f.Meta = &m
@@ -221,7 +221,7 @@ func ParseFile(path string) (*File, error) {
 	return f, nil
 }
 
-// backfillMeta fills f.Meta from rec when the session file carries no pm-meta entry.
+// backfillMeta fills f.Meta from rec when the session file carries no meerkat-meta entry.
 // It reports whether the record named a session at all.
 func backfillMeta(f *File, rec failureRecord) bool {
 	if rec.ID == "" || rec.Kind == "" {
@@ -267,7 +267,7 @@ func ScanDir(dir string) ([]*File, error) {
 				return err
 			}
 			files = append(files, f)
-		case strings.HasSuffix(path, ".pm-failure.json"):
+		case strings.HasSuffix(path, ".meerkat-failure.json"):
 			orphans = append(orphans, path)
 		}
 		return nil
@@ -291,7 +291,7 @@ func ScanDir(dir string) ([]*File, error) {
 // does not exist. It reports false when the record is old-format (no id) or the session
 // file exists after all; either way there is no extra entry.
 func orphanFile(recPath string) (*File, bool, error) {
-	sessionFile := strings.TrimSuffix(recPath, ".pm-failure.json") + ".jsonl"
+	sessionFile := strings.TrimSuffix(recPath, ".meerkat-failure.json") + ".jsonl"
 	if _, err := os.Stat(sessionFile); err == nil {
 		return nil, false, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -324,8 +324,8 @@ type Spec struct {
 	GoalTools                  []string
 	Opening, Continue          string
 	Meta                       Meta
-	ContextFile                string // PM_CONTEXT
-	GuardiansURL               string // PM_GUARDIANS_URL
+	ContextFile                string // MEERKAT_CONTEXT
+	GuardiansURL               string // MEERKAT_GUARDIANS_URL
 	MaxContinuePrompts         int
 	// SessionTimeoutSeconds bounds the whole session; Registry.Run passes it as MaxDuration.
 	SessionTimeoutSeconds int
@@ -387,12 +387,12 @@ func (r *Registry) Run(ctx context.Context, s Spec) (Result, error) {
 			Dir:  s.Cwd,
 			Env: []string{
 				"PI_CODING_AGENT_DIR=" + s.OMP.AgentDir,
-				"PM_KIND=" + string(s.Meta.Kind),
-				"PM_GOAL_TOOLS=" + strings.Join(s.GoalTools, ","),
-				"PM_CONTINUE=" + s.Continue,
-				"PM_META=" + string(meta),
-				"PM_CONTEXT=" + s.ContextFile,
-				"PM_GUARDIANS_URL=" + s.GuardiansURL,
+				"MEERKAT_KIND=" + string(s.Meta.Kind),
+				"MEERKAT_GOAL_TOOLS=" + strings.Join(s.GoalTools, ","),
+				"MEERKAT_CONTINUE=" + s.Continue,
+				"MEERKAT_META=" + string(meta),
+				"MEERKAT_CONTEXT=" + s.ContextFile,
+				"MEERKAT_GUARDIANS_URL=" + s.GuardiansURL,
 			},
 		},
 		Opening:            s.Opening,
@@ -437,7 +437,7 @@ func (r *Registry) Run(ctx context.Context, s Spec) (Result, error) {
 	return Result{SessionID: res.SessionID, SessionFile: res.SessionFile, ToolName: res.ToolName, Args: res.Args}, nil
 }
 
-// State is the §4 session state.
+// State is the session state reported by GET /v1/sessions.
 type State string
 
 const (

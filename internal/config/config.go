@@ -124,11 +124,11 @@ type Council struct {
 	ImplIssue           ImplIssue  `yaml:"implIssue"`
 	LaunchLink          LaunchLink `yaml:"launchLink"`
 	Reply               Reply      `yaml:"reply"`
-	// Archive is nil when decisions are not archived in the PM repository.
+	// Archive is nil when decisions are not archived in the agenda repository.
 	Archive *Archive `yaml:"archive"`
 }
 
-// ImplIssue holds the title and body templates of an implementation issue (contract §7).
+// ImplIssue holds the title and body templates of an implementation issue.
 type ImplIssue struct {
 	Title string `yaml:"title"`
 	Body  string `yaml:"body"`
@@ -157,7 +157,7 @@ func (t *ImplIssue) RenderTitle(d ImplIssueData) (string, error) { return render
 // RenderBody executes the body template.
 func (t *ImplIssue) RenderBody(d ImplIssueData) (string, error) { return render(t.body, d) }
 
-// LaunchLink is the omp-dispatch launch link of an implementation issue (contract §7):
+// LaunchLink is the omp-dispatch launch link of an implementation issue:
 // <base>/<owner>/<repo>/issues/<n>?spec=<{"cwd":<cwd>,"frontend":<frontend>}>.
 type LaunchLink struct {
 	Base     string   `yaml:"base"`
@@ -180,7 +180,7 @@ func (l LaunchLink) Link(repo string, n int, cwd string) (string, error) {
 	return fmt.Sprintf("%s/%s/issues/%d?%s", strings.TrimRight(l.Base, "/"), repo, n, url.Values{"spec": {string(spec)}}.Encode()), nil
 }
 
-// Reply holds the body template of a pm:reply that settles an escalated ask.
+// Reply holds the body template of a meerkat:reply that settles an escalated ask.
 type Reply struct {
 	Body string `yaml:"body"`
 
@@ -196,7 +196,7 @@ type ReplyData struct {
 // RenderBody executes the body template.
 func (r *Reply) RenderBody(d ReplyData) (string, error) { return render(r.body, d) }
 
-// Archive names the PM-repository directories of decision and vote files.
+// Archive names the agenda-repository directories of decision and vote files.
 type Archive struct {
 	Decisions string `yaml:"decisions"`
 	Votes     string `yaml:"votes"`
@@ -285,11 +285,11 @@ var SessionKinds = []SessionKind{KindDraft, KindVote, KindRevise, KindArbitrate}
 
 // Council plugin tools (plugin/index.ts).
 const (
-	ToolReadIssue = "pm_read_issue"
-	ToolProxyRead = "pm_proxy_read"
-	ToolDraft     = "pm_draft"
-	ToolVote      = "pm_vote"
-	ToolRuling    = "pm_ruling"
+	ToolReadIssue = "meerkat_read_issue"
+	ToolProxyRead = "meerkat_proxy_read"
+	ToolDraft     = "meerkat_draft"
+	ToolVote      = "meerkat_vote"
+	ToolRuling    = "meerkat_ruling"
 )
 
 // PluginTools are the plugin tools registered in a session of kind k.
@@ -440,13 +440,13 @@ func (c *Config) Seat(id string) (Seat, bool) {
 }
 
 type Repos struct {
-	PM     PMRepo     `yaml:"pm"`
+	Agenda AgendaRepo `yaml:"agenda"`
 	Code   []CodeRepo `yaml:"code"`
 	Design []string   `yaml:"design"`
 	OMP    []string   `yaml:"omp"`
 }
 
-type PMRepo struct {
+type AgendaRepo struct {
 	Repo    string     `yaml:"repo"`
 	Project ProjectRef `yaml:"project"`
 }
@@ -832,9 +832,9 @@ func load(root string, fsys fs.FS) (*Config, error) {
 	// shared/repos.yaml
 	{
 		f := v.file("shared/repos.yaml")
-		f.repo("pm.repo", rep.PM.Repo)
-		f.str("pm.project.owner", rep.PM.Project.Owner)
-		f.positive("pm.project.number", rep.PM.Project.Number)
+		f.repo("agenda.repo", rep.Agenda.Repo)
+		f.str("agenda.project.owner", rep.Agenda.Project.Owner)
+		f.positive("agenda.project.number", rep.Agenda.Project.Number)
 		f.present("code", rep.Code != nil)
 		for i, c := range rep.Code {
 			f.repo(fmt.Sprintf("code[%d].repo", i), c.Repo)
@@ -1036,7 +1036,7 @@ func (f fileValidator) exists(path, rel string) {
 	}
 }
 
-// repoPath checks a directory of the PM repository: relative, slash-separated and clean.
+// repoPath checks a directory of the agenda repository: relative, slash-separated and clean.
 func (f fileValidator) repoPath(key, s string) {
 	if f.str(key, s) && (path.IsAbs(s) || path.Clean(s) != s || s == "." || s == ".." || strings.HasPrefix(s, "../")) {
 		f.errorf(key, "%q is not a clean relative directory of the repository", s)

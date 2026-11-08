@@ -1,4 +1,4 @@
-// Command meerkat-council runs the Pepgent PM council.
+// Command meerkat-council runs the Meerkat council.
 //
 //	meerkat-council app    --config-root <dir>   repository webhook endpoint; wakes the daemon
 //	meerkat-council daemon --config-root <dir>   agenda queue rebuilt from GitHub; panels; HTTP API
@@ -76,7 +76,7 @@ func runApp(ctx context.Context, root string) error {
 	if secret == "" {
 		return fmt.Errorf("council/runtime.yaml: app.webhookSecretFile: %s is empty", rt.WebhookSecretFile)
 	}
-	a := app.New([]byte(secret), cfg.Repos.PM.Repo, rt.DaemonURL)
+	a := app.New([]byte(secret), cfg.Repos.Agenda.Repo, rt.DaemonURL)
 	slog.Info("app listening", "addr", rt.Listen, "daemon", rt.DaemonURL)
 	return serve(ctx, rt.Listen, a.Handler())
 }
@@ -95,7 +95,7 @@ func runDaemon(ctx context.Context, root string) error {
 	if err != nil {
 		return err
 	}
-	project, err := gh.ResolveProject(ctx, cfg.Repos.PM.Project, cfg.Project.Fields)
+	project, err := gh.ResolveProject(ctx, cfg.Repos.Agenda.Project, cfg.Project.Fields)
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func runDaemon(ctx context.Context, root string) error {
 		cancel()
 		<-ran
 	}()
-	srv := api.New(d, reg, cfg.Goals, cfg.Loaded, cfg.Repos.PM.Repo, cfg.Runtime.SessionsDir, startedAt)
+	srv := api.New(d, reg, cfg.Goals, cfg.Loaded, cfg.Repos.Agenda.Repo, cfg.Runtime.SessionsDir, startedAt)
 	slog.Info("daemon listening", "addr", cfg.Runtime.Daemon.Listen, "project", project.ID, "issues", len(d.Queue()))
 	return serve(ctx, cfg.Runtime.Daemon.Listen, srv.Handler())
 }

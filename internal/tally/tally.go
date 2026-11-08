@@ -1,5 +1,5 @@
 // Package tally is the council's tally component: RecordVote and RecordRuling record a seat's
-// pm_vote or pm_ruling as a marker on the agenda issue, Evaluate decides a draft version from its
+// meerkat_vote or meerkat_ruling as a marker on the agenda issue, Evaluate decides a draft version from its
 // votes and rulings, and Publish carries a decision out on GitHub.
 package tally
 
@@ -42,7 +42,7 @@ func New(cfg *config.Config, gh GitHub, project github.Project) *Tally {
 	return &Tally{cfg: cfg, gh: gh, project: project}
 }
 
-// RecordVote posts seat's pm:vote on draft version of the issue ref. It re-reads the issue's markers
+// RecordVote posts seat's meerkat:vote on draft version of the issue ref. It re-reads the issue's markers
 // first and drops the vote when that seat already voted on that version.
 func (t *Tally) RecordVote(ctx context.Context, ref queue.Ref, seat string, version int, rows []markers.VoteRow) error {
 	repo, n, ms, err := t.markers(ctx, ref)
@@ -64,7 +64,7 @@ func (t *Tally) RecordVote(ctx context.Context, ref queue.Ref, seat string, vers
 	return nil
 }
 
-// RecordRuling posts seat's pm:ruling on draft version of the issue ref. It re-reads the issue's
+// RecordRuling posts seat's meerkat:ruling on draft version of the issue ref. It re-reads the issue's
 // markers first and drops the ruling when every row it rules already has a ruling on that version.
 func (t *Tally) RecordRuling(ctx context.Context, ref queue.Ref, seat string, version int, rows []markers.RulingRow) error {
 	repo, n, ms, err := t.markers(ctx, ref)

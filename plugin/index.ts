@@ -2,15 +2,15 @@
  * meerkat-council omp plugin.
  *
  * The council program starts every seat session with:
- * - PM_KIND: "draft" | "vote" | "revise" | "arbitrate"
- * - PM_GOAL_TOOLS: comma-separated tools of this kind whose successful call completes the session
- * - PM_CONTINUE: the continue text injected while no goal tool has succeeded
- * - PM_META: JSON recorded as the `pm-meta` custom entry of the session
- * - PM_CONTEXT: path of a JSON file with the seat, its rights and proxy-read mapping, the PM
- *   repository, the repositories by category, the human issues, the draft, the escalation, the
+ * - MEERKAT_KIND: "draft" | "vote" | "revise" | "arbitrate"
+ * - MEERKAT_GOAL_TOOLS: comma-separated tools of this kind whose successful call completes the session
+ * - MEERKAT_CONTINUE: the continue text injected while no goal tool has succeeded
+ * - MEERKAT_META: JSON recorded as the `meerkat-meta` custom entry of the session
+ * - MEERKAT_CONTEXT: path of a JSON file with the seat, its rights and proxy-read mapping, the
+ *   agenda repository, the repositories by category, the human issues, the draft, the escalation, the
  *   row categories (tally.yaml) and the rows an arbitrate session rules on
- * - PM_GUARDIANS_URL: base URL of meerkat-guardians, which serves proxy reads
- * - GH_TOKEN: read access to the PM repository
+ * - MEERKAT_GUARDIANS_URL: base URL of meerkat-guardians, which serves proxy reads
+ * - GH_TOKEN: read access to the agenda repository
  *
  * The plugin reads GitHub but never writes it: a goal tool only validates its arguments; the
  * program takes them from the RPC event stream and writes the markers. An invalid call throws,
@@ -30,7 +30,7 @@ interface Context {
 	ref: string;
 	seat: string;
 	rights: string[];
-	pmRepo: string;
+	agendaRepo: string;
 	repos: Record<Content, string[]>;
 	proxy: { seat: string; default: string; others: string[]; content: Content[]; note: string };
 	humanIssues: { ref: string; decided: boolean }[];
@@ -93,15 +93,15 @@ async function readIssue(repo: string, number: number, signal: AbortSignal | und
 }
 
 export default function meerkatCouncil(pi: ExtensionAPI): void {
-	const kind = requiredEnv("PM_KIND");
+	const kind = requiredEnv("MEERKAT_KIND");
 	if (kind !== "draft" && kind !== "vote" && kind !== "revise" && kind !== "arbitrate") {
-		throw new Error(`meerkat-council plugin: PM_KIND ${kind} is not draft, vote, revise or arbitrate`);
+		throw new Error(`meerkat-council plugin: MEERKAT_KIND ${kind} is not draft, vote, revise or arbitrate`);
 	}
-	const goalTools = new Set(requiredEnv("PM_GOAL_TOOLS").split(","));
-	const continueText = requiredEnv("PM_CONTINUE");
-	const meta: unknown = JSON.parse(requiredEnv("PM_META"));
-	const guardiansURL = requiredEnv("PM_GUARDIANS_URL").replace(/\/+$/, "");
-	const ctx = JSON.parse(readFileSync(requiredEnv("PM_CONTEXT"), "utf8")) as Context;
+	const goalTools = new Set(requiredEnv("MEERKAT_GOAL_TOOLS").split(","));
+	const continueText = requiredEnv("MEERKAT_CONTINUE");
+	const meta: unknown = JSON.parse(requiredEnv("MEERKAT_META"));
+	const guardiansURL = requiredEnv("MEERKAT_GUARDIANS_URL").replace(/\/+$/, "");
+	const ctx = JSON.parse(readFileSync(requiredEnv("MEERKAT_CONTEXT"), "utf8")) as Context;
 	const z = pi.zod;
 	let goalReached = false;
 
@@ -115,29 +115,29 @@ export default function meerkatCouncil(pi: ExtensionAPI): void {
 	const humanRefs = ctx.humanIssues.map(h => h.ref);
 
 	pi.on("session_start", () => {
-		pi.appendEntry("pm-meta", meta);
+		pi.appendEntry("meerkat-meta", meta);
 	});
 
 	pi.registerTool({
-		name: "pm_read_issue",
-		label: "Read PM issue",
-		description: `Read an issue of the PM repository ${ctx.pmRepo}: title, body and every comment.`,
+		name: "meerkat_read_issue",
+		label: "Read agenda issue",
+		description: `Read an issue of the agenda repository ${ctx.agendaRepo}: title, body and every comment.`,
 		parameters: z.object({
-			ref: z.string().describe(`Issue reference ${ctx.pmRepo}#<number>`),
+			ref: z.string().describe(`Issue reference ${ctx.agendaRepo}#<number>`),
 		}),
 		loadMode: "essential",
 		approval: "read",
 		async execute(_id, params, signal) {
 			const ref = parseRef(params.ref);
-			if (!ref || !sameRef(ref.repo, ctx.pmRepo)) {
-				throw new Error(`ref must be ${ctx.pmRepo}#<number>; got ${params.ref}`);
+			if (!ref || !sameRef(ref.repo, ctx.agendaRepo)) {
+				throw new Error(`ref must be ${ctx.agendaRepo}#<number>; got ${params.ref}`);
 			}
 			return { content: [{ type: "text" as const, text: await readIssue(ref.repo, ref.number, signal) }] };
 		},
 	});
 
 	pi.registerTool({
-		name: "pm_proxy_read",
+		name: "meerkat_proxy_read",
 		label: "Proxy read",
 		description:
 			`Ask the intent guardians to read a code, design or omp repository for you and return facts with sources. ` +
@@ -198,7 +198,7 @@ export default function meerkatCouncil(pi: ExtensionAPI): void {
 				.describe(`Implementation issue to create in one of ${ctx.repos.code.join(", ") || "no repository"}; omit this field (do not pass a key at all) when the row has no implementation issue`),
 		});
 		pi.registerTool({
-			name: "pm_draft",
+			name: "meerkat_draft",
 			label: "Submit draft",
 			description: "Submit this panel's decision table; a successful call ends your task. The program assigns the version.",
 			parameters: z.object({
@@ -241,7 +241,7 @@ export default function meerkatCouncil(pi: ExtensionAPI): void {
 				if (ctx.escalation && settle === null) {
 					throw new Error(`settle required: ${ctx.escalation.issue} ask ${ctx.escalation.ask}`);
 				}
-				return recorded("pm_draft");
+				return recorded("meerkat_draft");
 			},
 		});
 	} else if (kind === "vote") {
@@ -253,7 +253,7 @@ export default function meerkatCouncil(pi: ExtensionAPI): void {
 			classification: z.string().nullable().describe("Your view of the row's category, or null"),
 		});
 		pi.registerTool({
-			name: "pm_vote",
+			name: "meerkat_vote",
 			label: "Vote",
 			description: "Cast this seat's vote on every row of the current draft; a successful call ends your task.",
 			parameters: z.object({ rows: z.array(voteRow) }),
@@ -280,13 +280,13 @@ export default function meerkatCouncil(pi: ExtensionAPI): void {
 				}
 				const missing = want.filter(id => !seen.has(id));
 				if (missing.length > 0) throw new Error(`rows missing for draft v${draft.version}: [${missing.join(", ")}]`);
-				return recorded("pm_vote");
+				return recorded("meerkat_vote");
 			},
 		});
 	} else {
 		const disputed = ctx.disputed;
 		pi.registerTool({
-			name: "pm_ruling",
+			name: "meerkat_ruling",
 			label: "Rule categories",
 			description: `Rule the category of every disputed row (${disputed.join(", ")}); a successful call ends your task.`,
 			parameters: z.object({
@@ -304,7 +304,7 @@ export default function meerkatCouncil(pi: ExtensionAPI): void {
 				}
 				const missing = disputed.filter(id => !seen.has(id));
 				if (missing.length > 0) throw new Error(`disputed rows not ruled: [${missing.join(", ")}]`);
-				return recorded("pm_ruling");
+				return recorded("meerkat_ruling");
 			},
 		});
 	}

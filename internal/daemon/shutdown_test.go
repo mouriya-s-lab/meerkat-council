@@ -33,7 +33,7 @@ func shutdownConfig(timeoutSeconds int) *config.Config {
 
 func oneAgendaPanel() *fakeGitHub {
 	return &fakeGitHub{items: []github.Item{
-		{ID: "i1", Repo: "o/pm", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
+		{ID: "i1", Repo: "o/agenda", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
 	}}
 }
 

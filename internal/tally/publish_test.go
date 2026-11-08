@@ -36,7 +36,7 @@ type fakeIssue struct {
 
 type fakeGitHub struct {
 	issues  map[string]*fakeIssue // by lower-case ref
-	files   map[string]string     // PM repository default branch: path -> content
+	files   map[string]string     // agenda repository default branch: path -> content
 	commits int
 	budget  int // mutations left before the crash; -1 never crashes
 	crashed bool
@@ -254,8 +254,8 @@ func (f *fakeGitHub) state() string {
 }
 
 const (
-	pmRepo   = "mouriya-s-lab/meerkat-e2e-agenda"
-	codeRepo = "mouriya-s-lab/meerkat-e2e-code"
+	agendaRepo = "mouriya-s-lab/meerkat-e2e-agenda"
+	codeRepo   = "mouriya-s-lab/meerkat-e2e-code"
 )
 
 func loadConfig(t *testing.T) *config.Config {
@@ -316,30 +316,30 @@ func humanScenario(t *testing.T, cfg *config.Config) (*fakeGitHub, Publication) 
 			{ID: "D20-01", What: "count", Where: "main.go", How: "add", Tradeoff: "none", Category: "c", Deliver: &markers.Deliver{Repo: codeRepo, Title: "notes count", Body: "add notes count"}},
 			{ID: "D20-02", What: "other", Where: "x", How: "y", Tradeoff: "z", Category: "c", Deliver: &markers.Deliver{Repo: codeRepo, Title: "other", Body: "b"}},
 		},
-		Supersedes: []string{pmRepo + "#21", pmRepo + "#22"},
+		Supersedes: []string{agendaRepo + "#21", agendaRepo + "#22"},
 		Settle:     &markers.Settle{Kind: markers.SettleReplace, Text: "replace it"},
 	}
 	vote := markers.Vote{Seat: "Argon", Version: 1, Rows: []markers.VoteRow{{Row: "D20-01", Choice: markers.ChoiceApprove}, {Row: "D20-02", Choice: markers.ChoiceApprove}}}
 	gh := &fakeGitHub{
 		budget: -1, project: p, fields: fields, options: options, files: map[string]string{},
 		issues: map[string]*fakeIssue{
-			key(pmRepo, 20): {repo: pmRepo, number: 20, title: "human", body: "please\n\n" + esc, itemID: "item-20",
+			key(agendaRepo, 20): {repo: agendaRepo, number: 20, title: "human", body: "please\n\n" + esc, itemID: "item-20",
 				item:     map[string]string{fo.Kind.Name: fo.Kind.Options.Human, fo.Status.Name: fo.Status.Options.InProgress},
 				comments: []string{mustComment(t, "draft", draft), mustComment(t, "vote", vote)}},
-			key(pmRepo, 21): {repo: pmRepo, number: 21, title: "old", itemID: "item-21",
+			key(agendaRepo, 21): {repo: agendaRepo, number: 21, title: "old", itemID: "item-21",
 				item: map[string]string{fo.Kind.Name: fo.Kind.Options.Agenda, fo.Status.Name: fo.Status.Options.Todo}},
-			key(pmRepo, 22): {repo: pmRepo, number: 22, title: "other human", itemID: "item-22",
+			key(agendaRepo, 22): {repo: agendaRepo, number: 22, title: "other human", itemID: "item-22",
 				item: map[string]string{fo.Kind.Name: fo.Kind.Options.Human, fo.Status.Name: fo.Status.Options.Todo}},
 			key(codeRepo, 3): {repo: codeRepo, number: 3, title: "impl", itemID: "item-c3",
 				item:     map[string]string{fo.Kind.Name: fo.Kind.Options.Implementation, fo.Status.Name: fo.Status.Options.InProgress},
-				comments: []string{"<!-- pm:ask {\"v\":1,\"tier\":\"complex\",\"session\":\"s\"} -->"}},
+				comments: []string{"<!-- meerkat:ask {\"v\":1,\"tier\":\"complex\",\"session\":\"s\"} -->"}},
 		},
 	}
 	rows := []markers.DecisionRow{
 		{Row: "D20-01", Outcome: markers.OutcomePassed, Approve: 4, Threshold: 3, Reason: "approve 4 meets threshold 3"},
 		{Row: "D20-02", Outcome: markers.OutcomeRejected, Approve: 2, Threshold: 3, Reason: "approve 2 below threshold 3"},
 	}
-	return gh, Publication{Ref: queue.Ref(pmRepo + "#20"), Agenda: "D20", Draft: draft, Rows: rows}
+	return gh, Publication{Ref: queue.Ref(agendaRepo + "#20"), Agenda: "D20", Draft: draft, Rows: rows}
 }
 
 func markersOf(t *testing.T, bodies []string) []markers.Marker {
@@ -363,7 +363,7 @@ func TestPublishHumanReplace(t *testing.T) {
 	}
 	fo := cfg.Project.Fields
 
-	h := gh.issues[key(pmRepo, 20)]
+	h := gh.issues[key(agendaRepo, 20)]
 	var decs []markers.Decision
 	for _, m := range markersOf(t, h.comments) {
 		if d, ok := m.(markers.Decision); ok {
@@ -371,15 +371,15 @@ func TestPublishHumanReplace(t *testing.T) {
 		}
 	}
 	impl := codeRepo + "#4"
-	if len(decs) != 1 || !slices.Equal(decs[0].Impl, []string{impl}) || !slices.Equal(decs[0].Superseded, []string{pmRepo + "#21"}) {
+	if len(decs) != 1 || !slices.Equal(decs[0].Impl, []string{impl}) || !slices.Equal(decs[0].Superseded, []string{agendaRepo + "#21"}) {
 		t.Fatalf("decisions = %+v", decs)
 	}
 	for _, r := range decs[0].Rows {
-		if !strings.HasSuffix(r.Reason, "; supersede "+pmRepo+"#22 refused: a human issue") {
+		if !strings.HasSuffix(r.Reason, "; supersede "+agendaRepo+"#22 refused: a human issue") {
 			t.Errorf("row %s reason %q lacks the refusal", r.Row, r.Reason)
 		}
 	}
-	if last := h.comments[len(h.comments)-1]; !strings.Contains(last, "未变更：supersede "+pmRepo+"#22 refused: a human issue") {
+	if last := h.comments[len(h.comments)-1]; !strings.Contains(last, "未变更：supersede "+agendaRepo+"#22 refused: a human issue") {
 		t.Errorf("decision prose lacks the refusal line: %q", last)
 	}
 	if !h.closed || h.reason != github.Completed || h.item[fo.Status.Name] != fo.Status.Options.Done {
@@ -387,7 +387,7 @@ func TestPublishHumanReplace(t *testing.T) {
 	}
 
 	ni := gh.issues[key(codeRepo, 4)]
-	if ni == nil || ni.parent != key(pmRepo, 20) || ni.title != "notes count" {
+	if ni == nil || ni.parent != key(agendaRepo, 20) || ni.title != "notes count" {
 		t.Fatalf("implementation issue = %+v", ni)
 	}
 	if ni.item[fo.Kind.Name] != fo.Kind.Options.Implementation || ni.item[fo.Status.Name] != fo.Status.Options.Todo || ni.item[fo.Proposer.Name] != fo.Proposer.Options.CouncilSeat {
@@ -398,7 +398,7 @@ func TestPublishHumanReplace(t *testing.T) {
 		t.Errorf("implementation body marker = %#v, %v", m, err)
 	}
 	link, _ := cfg.Council.LaunchLink.Link(codeRepo, 4, cfg.Repos.Code[0].Cwd)
-	if !strings.Contains(ni.body, link) || !strings.Contains(ni.body, pmRepo+"#20") {
+	if !strings.Contains(ni.body, link) || !strings.Contains(ni.body, agendaRepo+"#20") {
 		t.Errorf("implementation body lacks the numbered link %s or the agenda: %q", link, ni.body)
 	}
 	if u, _ := url.Parse(link); u.Path != "/"+codeRepo+"/issues/4" {
@@ -408,12 +408,12 @@ func TestPublishHumanReplace(t *testing.T) {
 		t.Error("the rejected row got an implementation issue")
 	}
 
-	old := gh.issues[key(pmRepo, 21)]
+	old := gh.issues[key(agendaRepo, 21)]
 	if !old.closed || old.reason != github.NotPlanned || old.item[fo.Status.Name] != fo.Status.Options.Superseded ||
-		!slices.ContainsFunc(markersOf(t, old.comments), func(m markers.Marker) bool { return m == markers.Superseded{By: pmRepo + "#20"} }) {
+		!slices.ContainsFunc(markersOf(t, old.comments), func(m markers.Marker) bool { return m == markers.Superseded{By: agendaRepo + "#20"} }) {
 		t.Errorf("superseded issue = %+v", old)
 	}
-	if hu := gh.issues[key(pmRepo, 22)]; hu.closed || len(hu.comments) != 0 {
+	if hu := gh.issues[key(agendaRepo, 22)]; hu.closed || len(hu.comments) != 0 {
 		t.Errorf("refused human issue changed: %+v", hu)
 	}
 
@@ -479,20 +479,20 @@ func TestPublishWithdrawnReply(t *testing.T) {
 	fo := cfg.Project.Fields
 	esc := mustComment(t, "raised", markers.Escalation{Issue: codeRepo + "#3", Ask: 5})
 	draft := markers.Draft{Version: 2, Rows: []markers.Row{{ID: "D9-01", What: "w", Where: "p", How: "h", Tradeoff: "t", Category: "c",
-		Deliver: &markers.Deliver{Repo: codeRepo, Title: "t", Body: "b"}}}, Supersedes: []string{pmRepo + "#21"},
+		Deliver: &markers.Deliver{Repo: codeRepo, Title: "t", Body: "b"}}}, Supersedes: []string{agendaRepo + "#21"},
 		Settle: &markers.Settle{Kind: markers.SettleReplace, Text: "no longer needed"}, Withdrawn: new("dropped")}
 	gh := &fakeGitHub{
 		budget: -1, project: p, fields: fields, options: options, files: map[string]string{},
 		issues: map[string]*fakeIssue{
-			key(pmRepo, 9): {repo: pmRepo, number: 9, title: "agenda", body: esc, itemID: "item-9",
+			key(agendaRepo, 9): {repo: agendaRepo, number: 9, title: "agenda", body: esc, itemID: "item-9",
 				item: map[string]string{fo.Kind.Name: fo.Kind.Options.Agenda, fo.Status.Name: fo.Status.Options.InProgress}},
-			key(pmRepo, 21): {repo: pmRepo, number: 21, itemID: "item-21",
+			key(agendaRepo, 21): {repo: agendaRepo, number: 21, itemID: "item-21",
 				item: map[string]string{fo.Kind.Name: fo.Kind.Options.Agenda, fo.Status.Name: fo.Status.Options.Todo}},
 			key(codeRepo, 3): {repo: codeRepo, number: 3},
 		},
 	}
 	rows := []markers.DecisionRow{{Row: "D9-01", Outcome: markers.OutcomeWithdrawn, Approve: 0, Threshold: 3, Reason: "dropped"}}
-	pub := Publication{Ref: queue.Ref(pmRepo + "#9"), Agenda: "D9", Draft: draft, Rows: rows}
+	pub := Publication{Ref: queue.Ref(agendaRepo + "#9"), Agenda: "D9", Draft: draft, Rows: rows}
 	tl := New(cfg, gh, gh.project)
 	for range 2 {
 		if err := tl.Publish(context.Background(), pub); err != nil {
@@ -507,14 +507,14 @@ func TestPublishWithdrawnReply(t *testing.T) {
 	if len(ms) != 1 || c3.closed {
 		t.Fatalf("escalated issue = %+v", c3)
 	}
-	if r, ok := ms[0].(markers.Reply); !ok || r.Ask != 5 || r.Decision == nil || *r.Decision != pmRepo+"#9" ||
+	if r, ok := ms[0].(markers.Reply); !ok || r.Ask != 5 || r.Decision == nil || *r.Decision != agendaRepo+"#9" ||
 		!strings.Contains(c3.comments[0], "no longer needed") || !strings.Contains(c3.comments[0], "| D9-01 | withdrawn |") {
 		t.Errorf("reply = %#v %q", ms[0], c3.comments[0])
 	}
-	if old := gh.issues[key(pmRepo, 21)]; old.closed || len(old.comments) != 0 {
+	if old := gh.issues[key(agendaRepo, 21)]; old.closed || len(old.comments) != 0 {
 		t.Errorf("a non-human issue superseded %+v", old)
 	}
-	a := gh.issues[key(pmRepo, 9)]
+	a := gh.issues[key(agendaRepo, 9)]
 	ds := markersOf(t, a.comments)
 	if len(ds) != 1 || !a.closed || a.item[fo.Status.Name] != fo.Status.Options.Done {
 		t.Errorf("agenda = %+v", a)
@@ -546,7 +546,7 @@ func TestPublishBlankDeliverField(t *testing.T) {
 	gh := &fakeGitHub{
 		budget: -1, project: p, fields: fields, options: options, files: map[string]string{},
 		issues: map[string]*fakeIssue{
-			key(pmRepo, 5): {repo: pmRepo, number: 5, title: "agenda", body: "needs work", itemID: "item-5",
+			key(agendaRepo, 5): {repo: agendaRepo, number: 5, title: "agenda", body: "needs work", itemID: "item-5",
 				item:     map[string]string{fo.Kind.Name: fo.Kind.Options.Agenda, fo.Status.Name: fo.Status.Options.InProgress},
 				comments: []string{mustComment(t, "draft", draft), mustComment(t, "vote", vote)}},
 		},
@@ -555,7 +555,7 @@ func TestPublishBlankDeliverField(t *testing.T) {
 		{Row: "D5-01", Outcome: markers.OutcomePassed, Approve: 4, Threshold: 3, Reason: "approve 4 meets threshold 3"},
 		{Row: "D5-02", Outcome: markers.OutcomePassed, Approve: 4, Threshold: 3, Reason: "approve 4 meets threshold 3"},
 	}
-	pub := Publication{Ref: queue.Ref(pmRepo + "#5"), Agenda: "D5", Draft: draft, Rows: rows}
+	pub := Publication{Ref: queue.Ref(agendaRepo + "#5"), Agenda: "D5", Draft: draft, Rows: rows}
 	tl := New(cfg, gh, gh.project)
 	err := tl.Publish(context.Background(), pub)
 	if err == nil {
@@ -568,7 +568,7 @@ func TestPublishBlankDeliverField(t *testing.T) {
 	if gh.issues[key(codeRepo, 1)] != nil {
 		t.Error("the earlier valid row created an implementation issue before the failure")
 	}
-	if len(markersOf(t, gh.issues[key(pmRepo, 5)].comments)) != 2 {
+	if len(markersOf(t, gh.issues[key(agendaRepo, 5)].comments)) != 2 {
 		t.Error("the failed publish wrote a marker")
 	}
 	if err := tl.Publish(context.Background(), pub); err == nil || !strings.Contains(err.Error(), "deliver.title") {

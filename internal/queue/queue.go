@@ -1,7 +1,6 @@
-// Package queue derives the agenda queue from a snapshot of the PM repository: which agenda
+// Package queue derives the agenda queue from a snapshot of the agenda repository: which agenda
 // issues exist, which are human, which have a panel, which wait on an undecided human
-// prerequisite, which are decided or superseded (contract §1, §A, §C; box
-// pm_councilProgram_queue). Pure functions; no IO.
+// prerequisite, which are decided or superseded. Pure functions; no IO.
 package queue
 
 import (
@@ -55,7 +54,7 @@ const (
 	StatusSuperseded
 )
 
-// Issue is one PM-repository issue in the Project, as read from GitHub.
+// Issue is one agenda-repository issue in the Project, as read from GitHub.
 type Issue struct {
 	Ref    Ref
 	Number int
@@ -69,14 +68,14 @@ type Issue struct {
 	BlockedBy []Ref
 	// Markers are the council markers of the issue's comments, oldest first.
 	Markers []markers.Marker
-	// PanelAt is the creation time of the comment holding the latest pm:panel marker; zero
+	// PanelAt is the creation time of the comment holding the latest meerkat:panel marker; zero
 	// without one.
 	PanelAt time.Time
 }
 
 // LeftDeliberation reports whether the issue can no longer be deliberated: it is closed, or its
-// Status is the done or superseded option, and it carries no pm:decision. A live panel of such an
-// issue is stopped. An issue with a pm:decision is being published by its own panel, which closes
+// Status is the done or superseded option, and it carries no meerkat:decision. A live panel of such an
+// issue is stopped. An issue with a meerkat:decision is being published by its own panel, which closes
 // it and then sets Status=Done; stopping that panel would leave the publish unfinished.
 func (is Issue) LeftDeliberation() bool {
 	if hasKind(is.Markers, markers.KindDecision) {
@@ -91,14 +90,14 @@ type Seat struct {
 	CanVote bool
 }
 
-// Snapshot is the PM repository as read in one rebuild.
+// Snapshot is the agenda repository as read in one rebuild.
 type Snapshot struct {
 	Issues       []Issue
 	Seats        []Seat
 	AgendaPrefix string
 }
 
-// State is why an agenda issue can or cannot be convened now (§C), in decision order.
+// State is why an agenda issue can or cannot be convened now, in decision order.
 type State string
 
 const (
@@ -132,12 +131,12 @@ type Entry struct {
 	number  int // agenda number, 0 when absent or of another prefix
 	issue   int
 	panelAt time.Time
-	// unpublished: decided by a pm:decision whose publish has not reached its last write,
+	// unpublished: decided by a meerkat:decision whose publish has not reached its last write,
 	// Status=Done.
 	unpublished bool
 }
 
-// Panel is a panel's progress derived from pm:panel, pm:draft and pm:vote markers.
+// Panel is a panel's progress derived from meerkat:panel, meerkat:draft and meerkat:vote markers.
 type Panel struct {
 	Round   int      `json:"round"`
 	Version *int     `json:"version"`
@@ -148,7 +147,7 @@ type Panel struct {
 // Queue is the agenda issues in convening order: human issues first, then by agenda number.
 type Queue []Entry
 
-// §C kind values.
+// Project Kind option values.
 const (
 	kindHuman  = "Human"
 	kindAgenda = "Agenda"
@@ -254,8 +253,8 @@ func hasKind(ms []markers.Marker, k markers.Kind) bool {
 	return slices.ContainsFunc(ms, func(m markers.Marker) bool { return m.Kind() == k })
 }
 
-// panel derives the panel progress: round of the latest pm:panel, the highest draft version,
-// the seats that voted on it, and the voting seats that have not. Nil without a pm:panel.
+// panel derives the panel progress: round of the latest meerkat:panel, the highest draft version,
+// the seats that voted on it, and the voting seats that have not. Nil without a meerkat:panel.
 func panel(ms []markers.Marker, seats []Seat) *Panel {
 	last, ok := markers.LastPanel(ms)
 	if !ok {
@@ -285,7 +284,7 @@ func panel(ms []markers.Marker, seats []Seat) *Panel {
 }
 
 // compare orders human issues first, then by agenda number (issues without one last), then by
-// issue number. All entries are issues of the one PM repository.
+// issue number. All entries are issues of the one agenda repository.
 func compare(a, b Entry) int {
 	if a.human != b.human {
 		if a.human {
@@ -352,7 +351,7 @@ type Candidate struct {
 
 // Candidates returns, in queue order, the issues without a live panel that a panel may be started
 // for: ready ones are convened; interrupted ones are resumed; failed ones, and deliberating ones
-// without a live panel, are resumed only when their latest pm:panel comment was created before
+// without a live panel, are resumed only when their latest meerkat:panel comment was created before
 // resumeBefore, so a panel that failed or was left in this daemon process is never restarted by
 // it; decided ones whose decision is not fully published are resumed on every full rebuild. The
 // daemon passes its start time on full rebuilds and the zero time, which resumes none of them, on

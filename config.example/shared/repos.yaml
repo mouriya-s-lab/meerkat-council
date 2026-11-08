@@ -1,4 +1,4 @@
-pm:
+agenda:
   repo: mouriya-s-lab/meerkat-e2e-agenda
   project: { owner: mouriya-s-lab, number: 1 }
 code:

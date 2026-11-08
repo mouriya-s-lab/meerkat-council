@@ -83,7 +83,7 @@ func (f *fakeGitHub) SetOption(_ context.Context, _, item, field, option string)
 
 func testConfig() *config.Config {
 	cfg := &config.Config{}
-	cfg.Repos.PM.Repo = "o/pm"
+	cfg.Repos.Agenda.Repo = "o/agenda"
 	cfg.Council.Agenda = config.Agenda{Prefix: "D", First: 1}
 	cfg.Runtime.Daemon.RebuildIntervalSeconds = 60
 	f := &cfg.Project.Fields
@@ -103,15 +103,15 @@ var project = github.Project{
 func TestAdmission(t *testing.T) {
 	gh := &fakeGitHub{
 		items: []github.Item{
-			{ID: "i1", Repo: "o/pm", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D3", "Status": "Done"}},
-			{ID: "i4", Repo: "o/pm", Number: 4, Fields: map[string]string{"Kind": "Human"}},
-			{ID: "i2", Repo: "o/pm", Number: 2, Fields: map[string]string{"Kind": "Agenda"}},
-			{ID: "i3", Repo: "o/pm", Number: 3, Fields: map[string]string{}}, // no Kind: not admitted
-			{ID: "i5", Repo: "o/pm", Number: 5, Fields: map[string]string{"Kind": "Implementation"}},
+			{ID: "i1", Repo: "o/agenda", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D3", "Status": "Done"}},
+			{ID: "i4", Repo: "o/agenda", Number: 4, Fields: map[string]string{"Kind": "Human"}},
+			{ID: "i2", Repo: "o/agenda", Number: 2, Fields: map[string]string{"Kind": "Agenda"}},
+			{ID: "i3", Repo: "o/agenda", Number: 3, Fields: map[string]string{}}, // no Kind: not admitted
+			{ID: "i5", Repo: "o/agenda", Number: 5, Fields: map[string]string{"Kind": "Implementation"}},
 			{ID: "x9", Repo: "o/other", Number: 9, Fields: map[string]string{"Kind": "Agenda"}},
-			{ID: "i6", Repo: "o/pm", Number: 6, Fields: map[string]string{"Kind": "Agenda", "Status": "Done"}}, // closed before admission
+			{ID: "i6", Repo: "o/agenda", Number: 6, Fields: map[string]string{"Kind": "Agenda", "Status": "Done"}}, // closed before admission
 		},
-		blockers: map[int][]github.IssueRef{4: {{Repo: "o/pm", Number: 1}}},
+		blockers: map[int][]github.IssueRef{4: {{Repo: "o/agenda", Number: 1}}},
 	}
 	d, err := New(context.Background(), testConfig(), gh, project, &fakePanels{})
 	if err != nil {
@@ -130,11 +130,11 @@ func TestAdmission(t *testing.T) {
 	for _, e := range q {
 		got[e.Ref] = *e.Agenda + " " + *e.Status + " " + string(e.State)
 	}
-	wantQ := map[queue.Ref]string{"o/pm#1": "D3 Done decided", "o/pm#2": "D4 Todo held", "o/pm#4": "D5 Todo ready", "o/pm#6": "D6 Done decided"}
+	wantQ := map[queue.Ref]string{"o/agenda#1": "D3 Done decided", "o/agenda#2": "D4 Todo held", "o/agenda#4": "D5 Todo ready", "o/agenda#6": "D6 Done decided"}
 	if !reflect.DeepEqual(got, wantQ) {
 		t.Fatalf("queue = %v, want %v", got, wantQ)
 	}
-	if q[0].Ref != "o/pm#4" {
+	if q[0].Ref != "o/agenda#4" {
 		t.Errorf("human not first: %v", q[0].Ref)
 	}
 
@@ -164,9 +164,9 @@ func TestAdmission(t *testing.T) {
 
 func TestScheduleInterruptsForHumanIssue(t *testing.T) {
 	gh := &fakeGitHub{items: []github.Item{
-		{ID: "i1", Repo: "o/pm", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
-		{ID: "i2", Repo: "o/pm", Number: 2, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D2", "Status": "Todo"}},
-		{ID: "i3", Repo: "o/pm", Number: 3, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D3", "Status": "Todo"}},
+		{ID: "i1", Repo: "o/agenda", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
+		{ID: "i2", Repo: "o/agenda", Number: 2, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D2", "Status": "Todo"}},
+		{ID: "i3", Repo: "o/agenda", Number: 3, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D3", "Status": "Todo"}},
 	}}
 	cfg := testConfig()
 	cfg.Council.MaxConcurrentPanels = 2
@@ -184,7 +184,7 @@ func TestScheduleInterruptsForHumanIssue(t *testing.T) {
 		j := <-fp.started
 		got[j.Ref] = j.Start
 	}
-	if want := map[queue.Ref]queue.Start{"o/pm#1": queue.StartConvene, "o/pm#2": queue.StartConvene}; !reflect.DeepEqual(got, want) {
+	if want := map[queue.Ref]queue.Start{"o/agenda#1": queue.StartConvene, "o/agenda#2": queue.StartConvene}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("started %v, want %v", got, want)
 	}
 	if len(d.live) != 2 {
@@ -192,7 +192,7 @@ func TestScheduleInterruptsForHumanIssue(t *testing.T) {
 	}
 
 	// A human issue arrives: both agenda panels are interrupted before the human one starts.
-	gh.items = append(gh.items, github.Item{ID: "i4", Repo: "o/pm", Number: 4, Fields: map[string]string{"Kind": "Human", "Agenda": "D4", "Status": "Todo"}})
+	gh.items = append(gh.items, github.Item{ID: "i4", Repo: "o/agenda", Number: 4, Fields: map[string]string{"Kind": "Human", "Agenda": "D4", "Status": "Todo"}})
 	if err := d.refresh(ctx, 4); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestScheduleInterruptsForHumanIssue(t *testing.T) {
 		}
 	}
 	j := <-fp.started
-	if j.Ref != "o/pm#4" || j.Start != queue.StartConvene || len(j.HumanIssues) != 1 || j.HumanIssues[0].Decided {
+	if j.Ref != "o/agenda#4" || j.Start != queue.StartConvene || len(j.HumanIssues) != 1 || j.HumanIssues[0].Decided {
 		t.Fatalf("human job = %+v", j)
 	}
 	if len(d.live) != 1 || d.live[4] == nil || !d.live[4].human {
@@ -217,8 +217,8 @@ func TestScheduleInterruptsForHumanIssue(t *testing.T) {
 // the copy read before the supersede.
 func TestPanelEndRefreshesSupersededIssues(t *testing.T) {
 	gh := &fakeGitHub{items: []github.Item{
-		{ID: "i1", Repo: "o/pm", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
-		{ID: "i2", Repo: "o/pm", Number: 2, Fields: map[string]string{"Kind": "Human", "Agenda": "D2", "Status": "In Progress"}},
+		{ID: "i1", Repo: "o/agenda", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
+		{ID: "i2", Repo: "o/agenda", Number: 2, Fields: map[string]string{"Kind": "Human", "Agenda": "D2", "Status": "In Progress"}},
 	}}
 	cfg := testConfig()
 	cfg.Council.MaxConcurrentPanels = 1
@@ -229,7 +229,7 @@ func TestPanelEndRefreshesSupersededIssues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st := entryState(d.Queue(), "o/pm#1"); st != queue.StateHeld {
+	if st := entryState(d.Queue(), "o/agenda#1"); st != queue.StateHeld {
 		t.Fatalf("agenda issue before the decision = %q, want held", st)
 	}
 
@@ -238,12 +238,12 @@ func TestPanelEndRefreshesSupersededIssues(t *testing.T) {
 		Version:    1,
 		Rows:       []markers.DecisionRow{{Row: "r1", Outcome: markers.OutcomePassed, Approve: 1, Threshold: 1, Reason: "approve 1 meets threshold 1"}},
 		Impl:       []string{},
-		Superseded: []string{"o/pm#1"},
+		Superseded: []string{"o/agenda#1"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	mark, err := markers.Comment("", markers.Superseded{By: "o/pm#2"})
+	mark, err := markers.Comment("", markers.Superseded{By: "o/agenda#2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestPanelEndRefreshesSupersededIssues(t *testing.T) {
 	if len(d.live) != 0 {
 		t.Fatalf("panels started after the supersede: %v", d.live)
 	}
-	if st := entryState(d.Queue(), "o/pm#1"); st != queue.StateSuperseded {
+	if st := entryState(d.Queue(), "o/agenda#1"); st != queue.StateSuperseded {
 		t.Fatalf("agenda issue after the decision = %q, want superseded", st)
 	}
 }
@@ -273,7 +273,7 @@ func entryState(q queue.Queue, ref queue.Ref) queue.State {
 	return ""
 }
 
-// A failed panel is resumed by a full rebuild only when its pm:panel failed comment predates the
+// A failed panel is resumed by a full rebuild only when its meerkat:panel failed comment predates the
 // daemon process; refreshes resume none.
 func TestFailedResumesOnlyFromAnEarlierProcess(t *testing.T) {
 	reason := "model not found"
@@ -283,8 +283,8 @@ func TestFailedResumesOnlyFromAnEarlierProcess(t *testing.T) {
 	}
 	gh := &fakeGitHub{
 		items: []github.Item{
-			{ID: "i1", Repo: "o/pm", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "In Progress"}},
-			{ID: "i2", Repo: "o/pm", Number: 2, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D2", "Status": "In Progress"}},
+			{ID: "i1", Repo: "o/agenda", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "In Progress"}},
+			{ID: "i2", Repo: "o/agenda", Number: 2, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D2", "Status": "In Progress"}},
 		},
 		comments: map[int][]github.Comment{
 			1: {{Body: failed, CreatedAt: time.Now().Add(-time.Hour)}},
@@ -305,7 +305,7 @@ func TestFailedResumesOnlyFromAnEarlierProcess(t *testing.T) {
 		t.Fatalf("refresh resumed %v", d.live)
 	}
 	d.schedule(ctx, d.started)
-	if j := <-fp.started; j.Ref != "o/pm#1" || j.Start != queue.StartResume {
+	if j := <-fp.started; j.Ref != "o/agenda#1" || j.Start != queue.StartResume {
 		t.Fatalf("job = %+v", j)
 	}
 	if len(d.live) != 1 || d.live[1] == nil {
@@ -315,9 +315,9 @@ func TestFailedResumesOnlyFromAnEarlierProcess(t *testing.T) {
 
 func TestScheduleStopsPanelsOfIssuesThatLeftDeliberation(t *testing.T) {
 	gh := &fakeGitHub{items: []github.Item{
-		{ID: "i1", Repo: "o/pm", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
-		{ID: "i2", Repo: "o/pm", Number: 2, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D2", "Status": "Todo"}},
-		{ID: "i3", Repo: "o/pm", Number: 3, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D3", "Status": "Todo"}},
+		{ID: "i1", Repo: "o/agenda", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
+		{ID: "i2", Repo: "o/agenda", Number: 2, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D2", "Status": "Todo"}},
+		{ID: "i3", Repo: "o/agenda", Number: 3, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D3", "Status": "Todo"}},
 	}}
 	cfg := testConfig()
 	cfg.Council.MaxConcurrentPanels = 2
@@ -351,7 +351,7 @@ func TestScheduleStopsPanelsOfIssuesThatLeftDeliberation(t *testing.T) {
 	gh.items[0].Closed = true
 	step(1, time.Time{})
 	stoppedBecause(panel.ErrLeftDeliberation)
-	if j := <-fp.started; j.Ref != "o/pm#3" {
+	if j := <-fp.started; j.Ref != "o/agenda#3" {
 		t.Fatalf("started %v", j.Ref)
 	}
 
@@ -364,16 +364,16 @@ func TestScheduleStopsPanelsOfIssuesThatLeftDeliberation(t *testing.T) {
 	}
 
 	// A human issue interrupts #3; closing it undecided stops its panel and #3 is convened again.
-	gh.items = append(gh.items, github.Item{ID: "i4", Repo: "o/pm", Number: 4, Fields: map[string]string{"Kind": "Human", "Agenda": "D4", "Status": "Todo"}})
+	gh.items = append(gh.items, github.Item{ID: "i4", Repo: "o/agenda", Number: 4, Fields: map[string]string{"Kind": "Human", "Agenda": "D4", "Status": "Todo"}})
 	step(4, time.Time{})
 	stoppedBecause(panel.ErrInterrupted)
-	if j := <-fp.started; j.Ref != "o/pm#4" {
+	if j := <-fp.started; j.Ref != "o/agenda#4" {
 		t.Fatalf("started %v", j.Ref)
 	}
 	gh.items[3].Closed = true
 	step(4, time.Time{})
 	stoppedBecause(panel.ErrLeftDeliberation)
-	if j := <-fp.started; j.Ref != "o/pm#3" {
+	if j := <-fp.started; j.Ref != "o/agenda#3" {
 		t.Fatalf("started %v", j.Ref)
 	}
 	if len(d.live) != 1 || d.live[3] == nil {
@@ -383,11 +383,11 @@ func TestScheduleStopsPanelsOfIssuesThatLeftDeliberation(t *testing.T) {
 
 // The panel's own publish closes the issue before setting Status=Done; the issues closed event
 // that follows must not stop the panel that is still publishing, while a closed issue without a
-// pm:decision still has its panel stopped.
+// meerkat:decision still has its panel stopped.
 func TestScheduleKeepsThePanelPublishingItsDecision(t *testing.T) {
 	gh := &fakeGitHub{items: []github.Item{
-		{ID: "i1", Repo: "o/pm", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
-		{ID: "i2", Repo: "o/pm", Number: 2, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D2", "Status": "Todo"}},
+		{ID: "i1", Repo: "o/agenda", Number: 1, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D1", "Status": "Todo"}},
+		{ID: "i2", Repo: "o/agenda", Number: 2, Fields: map[string]string{"Kind": "Agenda", "Agenda": "D2", "Status": "Todo"}},
 	}}
 	cfg := testConfig()
 	cfg.Council.MaxConcurrentPanels = 2
@@ -427,7 +427,7 @@ func TestScheduleKeepsThePanelPublishingItsDecision(t *testing.T) {
 		t.Fatalf("cause = %v, want %v", cause, panel.ErrLeftDeliberation)
 	}
 	if len(d.live) != 1 || d.live[1] == nil {
-		t.Fatalf("live = %v, want only the publishing panel of o/pm#1", d.live)
+		t.Fatalf("live = %v, want only the publishing panel of o/agenda#1", d.live)
 	}
 	select {
 	case cause := <-fp.ended:
@@ -443,7 +443,7 @@ func TestRebuildReusesUnchangedIssues(t *testing.T) {
 	t1 := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	item := func(n int, updatedAt time.Time) github.Item {
 		return github.Item{
-			ID: fmt.Sprintf("i%d", n), Repo: "o/pm", Number: n,
+			ID: fmt.Sprintf("i%d", n), Repo: "o/agenda", Number: n,
 			UpdatedAt: updatedAt,
 			Fields:    map[string]string{"Kind": "Agenda", "Agenda": fmt.Sprintf("D%d", n), "Status": "Todo"},
 		}
@@ -514,7 +514,7 @@ func TestFullReadsAreNotIncremental(t *testing.T) {
 	it := func(n int) github.Item {
 		return github.Item{
 			ID:        fmt.Sprintf("i%d", n),
-			Repo:      "o/pm",
+			Repo:      "o/agenda",
 			Number:    n,
 			UpdatedAt: t1,
 			Fields:    map[string]string{"Kind": "Agenda", "Agenda": fmt.Sprintf("D%d", n), "Status": "In Progress"},

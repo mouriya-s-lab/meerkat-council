@@ -5,7 +5,7 @@ go 1.27.3
 require (
 	github.com/cli/go-gh/v2 v2.17.0
 	github.com/goccy/go-yaml v1.19.2
-	github.com/mouriya-s-lab/meerkat-guardians v0.0.0-20261108135554-027d97d1113e
+	github.com/mouriya-s-lab/meerkat-guardians v0.0.0-20261108150735-44d0cdc13264
 )
 
 require (

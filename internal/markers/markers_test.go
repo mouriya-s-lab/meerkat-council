@@ -22,7 +22,7 @@ func TestRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("format %T: %v", m, err)
 		}
-		if !strings.HasPrefix(line, "<!-- pm:"+string(m.Kind())+` {"v":1,`) || !strings.HasSuffix(line, " -->") {
+		if !strings.HasPrefix(line, "<!-- meerkat:"+string(m.Kind())+` {"v":1,`) || !strings.HasSuffix(line, " -->") {
 			t.Fatalf("format %T = %s", m, line)
 		}
 		got, err := Parse("Human text.\n\n" + line + "\n")
@@ -37,14 +37,14 @@ func TestRoundTrip(t *testing.T) {
 
 func TestParseRejects(t *testing.T) {
 	for _, tc := range []struct{ name, body, want string }{
-		{"missing field", `<!-- pm:panel {"v":1,"event":"started","round":1,"sessions":[],"prereq":null} -->`, "error: missing"},
-		{"missing nested field", `<!-- pm:vote {"v":1,"seat":"A","version":1,"rows":[{"row":"D1-01","choice":"approve","citation":null,"classification":null}]} -->`, "rows[0].counterexample: missing"},
-		{"null non-pointer", `<!-- pm:superseded {"v":1,"by":null} -->`, "by: null"},
-		{"wrong type", `<!-- pm:panel {"v":1,"event":"started","round":"1","sessions":[],"prereq":null,"error":null} -->`, "round"},
-		{"bad enum", `<!-- pm:panel {"v":1,"event":"paused","round":1,"sessions":[],"prereq":null,"error":null} -->`, "event"},
-		{"missing v", `<!-- pm:superseded {"by":"o/r#1"} -->`, "v: missing"},
-		{"wrong v", `<!-- pm:superseded {"v":2,"by":"o/r#1"} -->`, "v: want 1"},
-		{"unknown kind", `<!-- pm:impl {"v":1} -->`, "not a council marker kind"},
+		{"missing field", `<!-- meerkat:panel {"v":1,"event":"started","round":1,"sessions":[],"prereq":null} -->`, "error: missing"},
+		{"missing nested field", `<!-- meerkat:vote {"v":1,"seat":"A","version":1,"rows":[{"row":"D1-01","choice":"approve","citation":null,"classification":null}]} -->`, "rows[0].counterexample: missing"},
+		{"null non-pointer", `<!-- meerkat:superseded {"v":1,"by":null} -->`, "by: null"},
+		{"wrong type", `<!-- meerkat:panel {"v":1,"event":"started","round":"1","sessions":[],"prereq":null,"error":null} -->`, "round"},
+		{"bad enum", `<!-- meerkat:panel {"v":1,"event":"paused","round":1,"sessions":[],"prereq":null,"error":null} -->`, "event"},
+		{"missing v", `<!-- meerkat:superseded {"by":"o/r#1"} -->`, "v: missing"},
+		{"wrong v", `<!-- meerkat:superseded {"v":2,"by":"o/r#1"} -->`, "v: want 1"},
+		{"unknown kind", `<!-- meerkat:impl {"v":1} -->`, "not a council marker kind"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse(tc.body)
@@ -59,7 +59,7 @@ func TestParseNoMarker(t *testing.T) {
 	for _, body := range []string{
 		"",
 		"plain comment",
-		"<!-- pm:panel {\"v\":1} -->\nmarker not on the last line",
+		"<!-- meerkat:panel {\"v\":1} -->\nmarker not on the last line",
 	} {
 		if _, err := Parse(body); !errors.Is(err, ErrNoMarker) {
 			t.Errorf("Parse(%q) err = %v, want ErrNoMarker", body, err)
@@ -68,7 +68,7 @@ func TestParseNoMarker(t *testing.T) {
 }
 
 func TestParseHandWritten(t *testing.T) {
-	m, err := Parse(`<!-- pm:panel {"v":1,"event":"started","round":1,"sessions":[],"prereq":null,"error":null} -->`)
+	m, err := Parse(`<!-- meerkat:panel {"v":1,"event":"started","round":1,"sessions":[],"prereq":null,"error":null} -->`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,12 +79,12 @@ func TestParseHandWritten(t *testing.T) {
 
 func TestParseLineMatchesParse(t *testing.T) {
 	bodies := []string{
-		"hello\n\n<!-- pm:superseded {\"v\":1,\"by\":\"o/pm#9\"} -->\n",
-		"pad\r\n<!-- pm:panel {\"v\":1,\"event\":\"started\",\"round\":1,\"sessions\":[],\"prereq\":null,\"error\":null} -->  \t\r\n",
-		"a\nb\n<!-- pm:vote {\"v\":1,\"seat\":\"A\",\"version\":1,\"rows\":[{\"row\":\"D1-01\",\"choice\":\"approve\",\"counterexample\":null,\"citation\":null,\"classification\":null}]} -->",
+		"hello\n\n<!-- meerkat:superseded {\"v\":1,\"by\":\"o/agenda#9\"} -->\n",
+		"pad\r\n<!-- meerkat:panel {\"v\":1,\"event\":\"started\",\"round\":1,\"sessions\":[],\"prereq\":null,\"error\":null} -->  \t\r\n",
+		"a\nb\n<!-- meerkat:vote {\"v\":1,\"seat\":\"A\",\"version\":1,\"rows\":[{\"row\":\"D1-01\",\"choice\":\"approve\",\"counterexample\":null,\"citation\":null,\"classification\":null}]} -->",
 		"plain comment",
 		"",
-		"<!-- pm:panel {\"v\":1} -->\nmarker not on the last line",
+		"<!-- meerkat:panel {\"v\":1} -->\nmarker not on the last line",
 	}
 	for _, body := range bodies {
 		want, wantErr := Parse(body)

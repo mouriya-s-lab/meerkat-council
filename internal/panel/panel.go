@@ -2,8 +2,8 @@
 // seat with the draft right, one vote session per voting seat, then the tally: an arbitrate
 // session for category disputes, a new round with a revise session for counterexamples, or the
 // decision's publication. It keeps no progress of its own: before every step it re-reads the
-// issue and derives the next step from the pm:panel, pm:draft, pm:vote, pm:ruling and
-// pm:decision markers (contract §A). The daemon owns the panel's lifetime through ctx.
+// issue and derives the next step from the meerkat:panel, meerkat:draft, meerkat:vote, meerkat:ruling
+// and meerkat:decision markers. The daemon owns the panel's lifetime through ctx.
 package panel
 
 import (
@@ -50,7 +50,7 @@ type Tally interface {
 var ErrInterrupted = errors.New("interrupted for a human issue")
 
 // ErrLeftDeliberation is the cancel cause the daemon gives a panel whose issue was closed or set
-// to done or superseded before it carried a pm:decision. The panel is not resumed, so it posts
+// to done or superseded before it carried a meerkat:decision. The panel is not resumed, so it posts
 // nothing.
 var ErrLeftDeliberation = errors.New("the issue left deliberation")
 
@@ -104,7 +104,7 @@ type Step struct {
 	Pending []string // StepVote: voting seats without a vote on Version, in seat order
 }
 
-// Derive returns the next step: the round is the latest pm:panel's (1 without one); a draft whose
+// Derive returns the next step: the round is the latest meerkat:panel's (1 without one); a draft whose
 // version is below the round does not belong to it. A withdrawn draft is not voted on.
 func Derive(ms []markers.Marker, voters []string) Step {
 	round := 1
@@ -146,7 +146,7 @@ func Derive(ms []markers.Marker, voters []string) Step {
 }
 
 // Run runs the panel until its decision is published, it fails or ctx ends. A failure is posted
-// as pm:panel failed; cancellation with cause ErrInterrupted as pm:panel interrupted;
+// as meerkat:panel failed; cancellation with cause ErrInterrupted as meerkat:panel interrupted;
 // cancellation with cause ErrLeftDeliberation only logs the killed sessions; a daemon stop
 // (cause sessions.ErrShutdown) posts nothing. The sessions it kills are recorded by sessions.Registry.
 func (r *Runner) Run(ctx context.Context, j Job) {
@@ -165,31 +165,31 @@ func (r *Runner) Run(ctx context.Context, j Job) {
 		slog.Info("panel stopped: the issue left deliberation", "issue", j.Ref, "killed", open)
 		return
 	}
-	pm, post := endMarker(cause, err, round, open)
+	end, post := endMarker(cause, err, round, open)
 	if !post {
 		slog.Info("panel stopped with the daemon", "issue", j.Ref, "err", err)
 		return
 	}
 	var text string
-	switch pm.Event {
+	switch end.Event {
 	case markers.PanelInterrupted:
 		slog.Info("panel interrupted", "issue", j.Ref, "killed", open)
 		text = fmt.Sprintf("小组因人类议题被中止（第 %d 轮）；被中止的会话列在标记里，定案后按配置恢复。", round)
 	case markers.PanelFailed:
 		slog.Error("panel failed", "issue", j.Ref, "err", err, "running", open)
-		text = fmt.Sprintf("小组失败（第 %d 轮）：\n\n```text\n%s\n```", round, *pm.Error)
+		text = fmt.Sprintf("小组失败（第 %d 轮）：\n\n```text\n%s\n```", round, *end.Error)
 	case markers.PanelStarted, markers.PanelResumed, markers.PanelBlocked:
-		panic(fmt.Sprintf("panel end marker %q", pm.Event))
+		panic(fmt.Sprintf("panel end marker %q", end.Event))
 	}
-	if err := p.postPanel(context.WithoutCancel(ctx), pm, text); err != nil {
-		slog.Error("panel: post failed", "issue", j.Ref, "event", pm.Event, "err", err)
+	if err := p.postPanel(context.WithoutCancel(ctx), end, text); err != nil {
+		slog.Error("panel: post failed", "issue", j.Ref, "event", end.Event, "err", err)
 	}
 }
 
-// endMarker is the pm:panel a run that ended with err posts, given ctx's cancel cause: interrupted
-// with the killed sessions, or failed with the error and no sessions (contract §A: sessions only
+// endMarker is the meerkat:panel a run that ended with err posts, given ctx's cancel cause: interrupted
+// with the killed sessions, or failed with the error and no sessions (sessions are listed only
 // for interrupted). post is false when the daemon stopped the panel.
-func endMarker(cause, err error, round int, open []markers.PanelSession) (pm markers.Panel, post bool) {
+func endMarker(cause, err error, round int, open []markers.PanelSession) (end markers.Panel, post bool) {
 	switch {
 	case errors.Is(cause, ErrInterrupted):
 		if open == nil {
@@ -346,7 +346,7 @@ func (p *run) publish(ctx context.Context, st Step, rows []markers.DecisionRow, 
 	return p.tally.Publish(pctx, tally.Publication{Ref: p.job.Ref, Agenda: p.job.Agenda, Draft: *st.Draft, Rows: rows})
 }
 
-// arbitrate runs the arbitration seat's session on the disputed rows and records its pm_ruling.
+// arbitrate runs the arbitration seat's session on the disputed rows and records its meerkat_ruling.
 func (p *run) arbitrate(ctx context.Context, st Step, is issue, disputes []tally.Dispute, forks []markers.PanelSession) ([]markers.PanelSession, error) {
 	seat, _ := p.cfg.Seat(p.cfg.Tally.Arbitration.Seat)
 	var ps *markers.PanelSession
@@ -448,7 +448,7 @@ func (p *run) read(ctx context.Context) (issue, error) {
 	return is, nil
 }
 
-// draft runs the draft session, or in a later round the revise session, and posts its pm_draft.
+// draft runs the draft session, or in a later round the revise session, and posts its meerkat_draft.
 func (p *run) draft(ctx context.Context, st Step, is issue, forks []markers.PanelSession) ([]markers.PanelSession, error) {
 	seat, kind := p.cfg.DraftSeat(), config.KindDraft
 	if st.Draft != nil {
@@ -526,9 +526,9 @@ func (p *run) postDraft(ctx context.Context, st Step, res sessions.Result) error
 	if a.Withdrawn != nil && st.Draft == nil {
 		return fmt.Errorf("session %s: withdrawn must be null: only a revise session may withdraw the agenda", res.SessionID)
 	}
-	// pm_draft's schema makes deliver optional; an omitted deliver is no delivery, and the marker
-	// shape (contract §A) is a deliver object or "deliver":null — a nil Row across json.Marshal
-	// writes no deliver key, which markers.Parse would refuse. Re-decode with normalization.
+	// meerkat_draft's schema makes deliver optional; an omitted deliver is no delivery, and the
+	// marker shape is a deliver object or "deliver":null — a nil Row across json.Marshal writes no
+	// deliver key, which markers.Parse would refuse. Re-decode with normalization.
 	rows, err := normalizeDeliver(res.Args)
 	if err != nil {
 		return fmt.Errorf("%s arguments of session %s: %w", res.ToolName, res.SessionID, err)
@@ -657,12 +657,12 @@ func fork(forks []markers.PanelSession, kind config.SessionKind, seat string) *m
 	return &forks[i]
 }
 
-// sessionContext is the PM_CONTEXT file of a session.
+// sessionContext is the MEERKAT_CONTEXT file of a session.
 type sessionContext struct {
 	Ref         queue.Ref           `json:"ref"`
 	Seat        string              `json:"seat"`
 	Rights      []config.Right      `json:"rights"`
-	PMRepo      string              `json:"pmRepo"`
+	AgendaRepo  string              `json:"agendaRepo"`
 	Repos       contextRepos        `json:"repos"`
 	Proxy       config.ProxyReader  `json:"proxy"`
 	HumanIssues []HumanIssue        `json:"humanIssues"`
@@ -742,7 +742,7 @@ func (p *run) session(ctx context.Context, kind config.SessionKind, seat config.
 		humans = []HumanIssue{}
 	}
 	sc := sessionContext{
-		Ref: p.job.Ref, Seat: seat.ID, Rights: seat.Rights, PMRepo: p.cfg.Repos.PM.Repo,
+		Ref: p.job.Ref, Seat: seat.ID, Rights: seat.Rights, AgendaRepo: p.cfg.Repos.Agenda.Repo,
 		Repos: contextRepos{Code: []string{}, Design: p.cfg.Repos.Design, OMP: p.cfg.Repos.OMP},
 		Proxy: proxy, HumanIssues: humans, Draft: st.Draft, Escalation: is.escalation,
 		Categories: p.cfg.Tally.Categories, Disputed: disputed,
@@ -787,8 +787,8 @@ func (p *run) session(ctx context.Context, kind config.SessionKind, seat config.
 	})
 }
 
-func (p *run) postPanel(ctx context.Context, pm markers.Panel, text string) error {
-	body, err := markers.Comment(text, pm)
+func (p *run) postPanel(ctx context.Context, end markers.Panel, text string) error {
+	body, err := markers.Comment(text, end)
 	if err != nil {
 		return err
 	}
@@ -796,15 +796,15 @@ func (p *run) postPanel(ctx context.Context, pm markers.Panel, text string) erro
 	if err != nil {
 		return err
 	}
-	slog.Info("panel posted", "issue", p.job.Ref, "event", pm.Event, "round", pm.Round, "comment", id)
+	slog.Info("panel posted", "issue", p.job.Ref, "event", end.Event, "round", end.Round, "comment", id)
 	return nil
 }
 
 func (r *Runner) checkoutDir() string {
-	return filepath.Join(r.cfg.Runtime.CheckoutDir, filepath.FromSlash(r.cfg.Repos.PM.Repo))
+	return filepath.Join(r.cfg.Runtime.CheckoutDir, filepath.FromSlash(r.cfg.Repos.Agenda.Repo))
 }
 
-// syncCheckout clones the PM repository on first use, then fetches and resets it to the remote's
+// syncCheckout clones the agenda repository on first use, then fetches and resets it to the remote's
 // default branch. Git authenticates with the host's credential helper.
 func (r *Runner) syncCheckout(ctx context.Context) error {
 	r.checkoutMu.Lock()
@@ -814,7 +814,7 @@ func (r *Runner) syncCheckout(ctx context.Context) error {
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return err
 		}
-		if err := git(ctx, "", "clone", "https://github.com/"+r.cfg.Repos.PM.Repo+".git", dir); err != nil {
+		if err := git(ctx, "", "clone", "https://github.com/"+r.cfg.Repos.Agenda.Repo+".git", dir); err != nil {
 			return err
 		}
 	} else if err != nil {
